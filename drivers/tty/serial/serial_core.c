@@ -182,7 +182,7 @@ static int uart_port_startup(struct tty_struct *tty, struct uart_state *state,
 		int init_hw)
 {
 	struct uart_port *uport = uart_port_check(state);
-	unsigned long page;
+	void *addr;
 	unsigned long flags = 0;
 	int retval = 0;
 
@@ -198,13 +198,13 @@ static int uart_port_startup(struct tty_struct *tty, struct uart_state *state,
 	 * Initialise and allocate the transmit and temporary
 	 * buffer.
 	 */
-	page = get_zeroed_page(GFP_KERNEL);
-	if (!page)
+	addr = alloc_pages_exact(PAGE_SIZE * 4, GFP_KERNEL|__GFP_ZERO);
+	if (!addr)
 		return -ENOMEM;
 
 	uart_port_lock(state, flags);
 	if (!state->xmit.buf) {
-		state->xmit.buf = (unsigned char *) page;
+		state->xmit.buf = (unsigned char *) addr;
 		uart_circ_clear(&state->xmit);
 		uart_port_unlock(uport, flags);
 	} else {
@@ -213,7 +213,7 @@ static int uart_port_startup(struct tty_struct *tty, struct uart_state *state,
 		 * Do not free() the page under the port lock, see
 		 * uart_shutdown().
 		 */
-		free_page(page);
+		free_pages_exact(addr, PAGE_SIZE * 4);
 	}
 
 	retval = uport->ops->startup(uport);
@@ -316,7 +316,7 @@ static void uart_shutdown(struct tty_struct *tty, struct uart_state *state)
 	uart_port_unlock(uport, flags);
 
 	if (xmit_buf)
-		free_page((unsigned long)xmit_buf);
+		free_pages_exact((void *)xmit_buf, PAGE_SIZE * 4);
 }
 
 /**
@@ -863,9 +863,11 @@ static int uart_set_info(struct tty_struct *tty, struct tty_port *port,
 		goto check_and_exit;
 	}
 
-	retval = security_locked_down(LOCKDOWN_TIOCSSERIAL);
-	if (retval && (change_irq || change_port))
-		goto exit;
+	if (change_irq || change_port) {
+		retval = security_locked_down(LOCKDOWN_TIOCSSERIAL);
+		if (retval)
+			goto exit;
+	}
 
 	/*
 	 * Ask the low level driver to verify the settings.
@@ -1304,7 +1306,7 @@ static int uart_set_rs485_config(struct uart_port *port,
 	unsigned long flags;
 
 	if (!port->rs485_config)
-		return -ENOIOCTLCMD;
+		return -ENOTTY;
 
 	if (copy_from_user(&rs485, rs485_user, sizeof(*rs485_user)))
 		return -EFAULT;
@@ -1328,7 +1330,7 @@ static int uart_get_iso7816_config(struct uart_port *port,
 	struct serial_iso7816 aux;
 
 	if (!port->iso7816_config)
-		return -ENOIOCTLCMD;
+		return -ENOTTY;
 
 	spin_lock_irqsave(&port->lock, flags);
 	aux = port->iso7816;
@@ -1348,7 +1350,7 @@ static int uart_set_iso7816_config(struct uart_port *port,
 	unsigned long flags;
 
 	if (!port->iso7816_config)
-		return -ENOIOCTLCMD;
+		return -ENOTTY;
 
 	if (copy_from_user(&iso7816, iso7816_user, sizeof(*iso7816_user)))
 		return -EFAULT;

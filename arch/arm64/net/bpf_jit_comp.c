@@ -19,6 +19,10 @@
 
 #include "bpf_jit.h"
 
+#ifdef CONFIG_FASTUH_RKP
+#include <linux/rkp.h>
+#endif
+
 #define TMP_REG_1 (MAX_BPF_JIT_REG + 0)
 #define TMP_REG_2 (MAX_BPF_JIT_REG + 1)
 #define TCALL_CNT (MAX_BPF_JIT_REG + 2)
@@ -701,6 +705,19 @@ emit_cond_jmp:
 		}
 		break;
 
+	/* speculation barrier */
+	case BPF_ST | BPF_NOSPEC:
+		/*
+		 * Nothing required here.
+		 *
+		 * In case of arm64, we rely on the firmware mitigation of
+		 * Speculative Store Bypass as controlled via the ssbd kernel
+		 * parameter. Whenever the mitigation is enabled, it works
+		 * for all of the kernel code with no need to provide any
+		 * additional instructions.
+		 */
+		break;
+
 	/* ST: *(size *)(dst + off) = imm */
 	case BPF_ST | BPF_MEM | BPF_W:
 	case BPF_ST | BPF_MEM | BPF_H:
@@ -968,7 +985,9 @@ skip_init_ctx:
 	prog->bpf_func = (void *)ctx.image;
 	prog->jited = 1;
 	prog->jited_len = image_size;
-
+#ifdef CONFIG_FASTUH_RKP
+	fastuh_call(FASTUH_APP_RKP, 0x22, (u64)header, (u64)(header->pages * 0x1000), 0, 0);
+#endif
 	if (!prog->is_func || extra_pass) {
 		bpf_prog_fill_jited_linfo(prog, ctx.offset + 1);
 out_off:

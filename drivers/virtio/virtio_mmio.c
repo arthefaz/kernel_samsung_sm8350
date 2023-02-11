@@ -476,6 +476,9 @@ static int vm_find_vqs(struct virtio_device *vdev, unsigned nvqs,
 	if (err)
 		return err;
 
+	if (of_property_read_bool(vm_dev->pdev->dev.of_node, "virtio,wakeup"))
+		enable_irq_wake(irq);
+
 	for (i = 0; i < nvqs; ++i) {
 		if (!names[i]) {
 			vqs[i] = NULL;
@@ -743,28 +746,6 @@ static void vm_unregister_cmdline_devices(void)
 
 #endif
 
-#ifdef CONFIG_PM_SLEEP
-static int virtio_mmio_freeze(struct device *dev)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-	struct virtio_mmio_device *vm_dev = platform_get_drvdata(pdev);
-
-	return virtio_device_freeze(&vm_dev->vdev);
-}
-
-static int virtio_mmio_restore(struct device *dev)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-	struct virtio_mmio_device *vm_dev = platform_get_drvdata(pdev);
-
-	return virtio_device_restore(&vm_dev->vdev);
-}
-
-static const struct dev_pm_ops virtio_mmio_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(virtio_mmio_freeze, virtio_mmio_restore)
-};
-#endif
-
 /* Platform driver */
 
 static const struct of_device_id virtio_mmio_match[] = {
@@ -789,9 +770,6 @@ static struct platform_driver virtio_mmio_driver = {
 		.of_match_table	= virtio_mmio_match,
 		.acpi_match_table = ACPI_PTR(virtio_mmio_acpi_match),
 	},
-#ifdef CONFIG_PM_SLEEP
-	.driver.pm = &virtio_mmio_pm_ops,
-#endif
 };
 
 static int __init virtio_mmio_init(void)
@@ -805,7 +783,7 @@ static void __exit virtio_mmio_exit(void)
 	vm_unregister_cmdline_devices();
 }
 
-subsys_initcall(virtio_mmio_init);
+module_init(virtio_mmio_init);
 module_exit(virtio_mmio_exit);
 
 MODULE_AUTHOR("Pawel Moll <pawel.moll@arm.com>");

@@ -669,7 +669,8 @@ struct xfrm_spi_skb_cb {
 
 #define XFRM_SPI_SKB_CB(__skb) ((struct xfrm_spi_skb_cb *)&((__skb)->cb[0]))
 
-#ifdef CONFIG_AUDITSYSCALL
+// [ SEC_SELINUX_PORTING_COMMON - remove AUDIT_MAC_IPSEC_EVENT audit log, it conflict with security notification
+#if 0 //#ifdef CONFIG_AUDITSYSCALL
 static inline struct audit_buffer *xfrm_audit_start(const char *op)
 {
 	struct audit_buffer *audit_buf = NULL;
@@ -758,6 +759,7 @@ static inline void xfrm_audit_state_icvfail(struct xfrm_state *x,
 {
 }
 #endif /* CONFIG_AUDITSYSCALL */
+// ] SEC_SELINUX_PORTING_COMMON - remove AUDIT_MAC_IPSEC_EVENT audit log, it conflict with security notification
 
 static inline void xfrm_pol_hold(struct xfrm_policy *policy)
 {
@@ -1098,7 +1100,7 @@ static inline int __xfrm_policy_check2(struct sock *sk, int dir,
 		return __xfrm_policy_check(sk, ndir, skb, family);
 
 	return	(!net->xfrm.policy_count[dir] && !secpath_exists(skb)) ||
-		(skb_dst(skb)->flags & DST_NOPOLICY) ||
+		(skb_dst(skb) && (skb_dst(skb)->flags & DST_NOPOLICY)) ||
 		__xfrm_policy_check(sk, ndir, skb, family);
 }
 

@@ -814,6 +814,10 @@ struct sk_buff {
 
 	__u8			ipvs_property:1;
 	__u8			inner_protocol_type:1;
+
+#ifdef CONFIG_ENABLE_SFE
+	__u8			fast_forwarded:1;
+#endif
 	__u8			remcsum_offload:1;
 #ifdef CONFIG_NET_SWITCHDEV
 	__u8			offload_fwd_mark:1;
@@ -1488,6 +1492,11 @@ static inline void skb_mark_not_on_list(struct sk_buff *skb)
 {
 	skb->next = NULL;
 }
+
+/* Iterate through singly-linked GSO fragments of an skb. */
+#define skb_list_walk_safe(first, skb, next_skb)                               \
+	for ((skb) = (first), (next_skb) = (skb) ? (skb)->next : NULL; (skb);  \
+	     (skb) = (next_skb), (next_skb) = (skb) ? (skb)->next : NULL)
 
 static inline void skb_list_del_init(struct sk_buff *skb)
 {

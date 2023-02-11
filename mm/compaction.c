@@ -50,7 +50,7 @@ static inline void count_compact_events(enum vm_event_item item, long delta)
 #define pageblock_start_pfn(pfn)	block_start_pfn(pfn, pageblock_order)
 #define pageblock_end_pfn(pfn)		block_end_pfn(pfn, pageblock_order)
 
-static unsigned long release_freepages(struct list_head *freelist)
+unsigned long release_freepages(struct list_head *freelist)
 {
 	struct page *page, *next;
 	unsigned long high_pfn = 0;
@@ -66,7 +66,7 @@ static unsigned long release_freepages(struct list_head *freelist)
 	return high_pfn;
 }
 
-static void split_map_pages(struct list_head *list)
+void split_map_pages(struct list_head *list)
 {
 	unsigned int i, order, nr_pages;
 	struct page *page, *next;
@@ -1276,7 +1276,7 @@ fast_isolate_freepages(struct compact_control *cc)
 {
 	unsigned int limit = min(1U, freelist_scan_limit(cc) >> 1);
 	unsigned int nr_scanned = 0;
-	unsigned long low_pfn, min_pfn, high_pfn = 0, highest = 0;
+	unsigned long low_pfn, min_pfn, highest = 0;
 	unsigned long nr_isolated = 0;
 	unsigned long distance;
 	struct page *page = NULL;
@@ -1321,6 +1321,7 @@ fast_isolate_freepages(struct compact_control *cc)
 		struct page *freepage;
 		unsigned long flags;
 		unsigned int order_scanned = 0;
+		unsigned long high_pfn = 0;
 
 		if (!area->nr_free)
 			continue;
@@ -1629,6 +1630,7 @@ static unsigned long fast_find_migrateblock(struct compact_control *cc)
 	unsigned long pfn = cc->migrate_pfn;
 	unsigned long high_pfn;
 	int order;
+	bool found_block = false;
 
 	/* Skip hints are relied on to avoid repeats on the fast search */
 	if (cc->ignore_skip_hint)
@@ -1671,7 +1673,7 @@ static unsigned long fast_find_migrateblock(struct compact_control *cc)
 	high_pfn = pageblock_start_pfn(cc->migrate_pfn + distance);
 
 	for (order = cc->order - 1;
-	     order >= PAGE_ALLOC_COSTLY_ORDER && pfn == cc->migrate_pfn && nr_scanned < limit;
+	     order >= PAGE_ALLOC_COSTLY_ORDER && !found_block && nr_scanned < limit;
 	     order--) {
 		struct free_area *area = &cc->zone->free_area[order];
 		struct list_head *freelist;
@@ -1686,7 +1688,11 @@ static unsigned long fast_find_migrateblock(struct compact_control *cc)
 		list_for_each_entry(freepage, freelist, lru) {
 			unsigned long free_pfn;
 
-			nr_scanned++;
+			if (nr_scanned++ >= limit) {
+				move_freelist_tail(freelist, freepage);
+				break;
+			}
+
 			free_pfn = page_to_pfn(freepage);
 			if (free_pfn < high_pfn) {
 				/*
@@ -1695,12 +1701,8 @@ static unsigned long fast_find_migrateblock(struct compact_control *cc)
 				 * the list assumes an entry is deleted, not
 				 * reordered.
 				 */
-				if (get_pageblock_skip(freepage)) {
-					if (list_is_last(freelist, &freepage->lru))
-						break;
-
+				if (get_pageblock_skip(freepage))
 					continue;
-				}
 
 				/* Reorder to so a future search skips recent pages */
 				move_freelist_tail(freelist, freepage);
@@ -1708,13 +1710,8 @@ static unsigned long fast_find_migrateblock(struct compact_control *cc)
 				update_fast_start_pfn(cc, free_pfn);
 				pfn = pageblock_start_pfn(free_pfn);
 				cc->fast_search_fail = 0;
+				found_block = true;
 				set_pageblock_skip(freepage);
-				break;
-			}
-
-			if (nr_scanned >= limit) {
-				cc->fast_search_fail++;
-				move_freelist_tail(freelist, freepage);
 				break;
 			}
 		}
@@ -1727,9 +1724,10 @@ static unsigned long fast_find_migrateblock(struct compact_control *cc)
 	 * If fast scanning failed then use a cached entry for a page block
 	 * that had free pages as the basis for starting a linear scan.
 	 */
-	if (pfn == cc->migrate_pfn)
+	if (!found_block) {
+		cc->fast_search_fail++;
 		pfn = reinit_migrate_pfn(cc);
-
+	}
 	return pfn;
 }
 
@@ -2415,16 +2413,14 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 	return rc;
 }
 
-
-/* Compact all zones within a node */
-static void compact_node(int nid)
+static void __compact_node(int nid, bool sync)
 {
 	pg_data_t *pgdat = NODE_DATA(nid);
 	int zoneid;
 	struct zone *zone;
 	struct compact_control cc = {
 		.order = -1,
-		.mode = MIGRATE_SYNC,
+		.mode = sync ? MIGRATE_SYNC : MIGRATE_ASYNC,
 		.ignore_skip_hint = true,
 		.whole_zone = true,
 		.gfp_mask = GFP_KERNEL,
@@ -2446,8 +2442,26 @@ static void compact_node(int nid)
 	}
 }
 
+#ifdef CONFIG_HUGEPAGE_POOL
+void compact_node_async(void)
+{
+	/* hugepage pool and kzerod assumes there is only one node */
+	__compact_node(0, false);
+}
+#endif
+
+/* Compact all zones within a node */
+static void compact_node(int nid)
+{
+	__compact_node(nid, true);
+}
+
 /* Compact all nodes in the system */
+#ifdef CONFIG_HUGEPAGE_POOL
+void compact_nodes(void)
+#else
 static void compact_nodes(void)
+#endif
 {
 	int nid;
 

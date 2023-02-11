@@ -215,7 +215,9 @@ int snd_card_new(struct device *parent, int idx, const char *xid,
 	init_waitqueue_head(&card->power_sleep);
 #endif
 	init_waitqueue_head(&card->remove_sleep);
-
+#ifdef CONFIG_AUDIO_QGKI
+	init_waitqueue_head(&card->offline_poll_wait);
+#endif
 	device_initialize(&card->card_dev);
 	card->card_dev.parent = parent;
 	card->card_dev.class = sound_class;
@@ -384,10 +386,8 @@ int snd_card_disconnect(struct snd_card *card)
 		return 0;
 	}
 	card->shutdown = 1;
-	spin_unlock(&card->files_lock);
 
 	/* replace file->f_op with special dummy operations */
-	spin_lock(&card->files_lock);
 	list_for_each_entry(mfile, &card->files_list, list) {
 		/* it's critical part, use endless loop */
 		/* we have no room to fail */
@@ -980,6 +980,37 @@ int snd_card_file_remove(struct snd_card *card, struct file *file)
 	return 0;
 }
 EXPORT_SYMBOL(snd_card_file_remove);
+
+#ifdef CONFIG_AUDIO_QGKI
+/**
+ * snd_card_change_online_state - mark card's online/offline state
+ * @card: Card to mark
+ * @online: whether online of offline
+ *
+ * Mutes the DAI DAC.
+ */
+void snd_card_change_online_state(struct snd_card *card, int online)
+{
+	snd_printd("snd card %s state change %d -> %d\n",
+		card->shortname, !card->offline, online);
+	card->offline = !online;
+	/* make sure offline is updated prior to wake up */
+	wmb();
+	xchg(&card->offline_change, 1);
+	wake_up_interruptible(&card->offline_poll_wait);
+}
+EXPORT_SYMBOL(snd_card_change_online_state);
+
+/**
+ * snd_card_is_online_state - return true if card is online state
+ * @card: Card to query
+ */
+bool snd_card_is_online_state(struct snd_card *card)
+{
+	return !card->offline;
+}
+EXPORT_SYMBOL(snd_card_is_online_state);
+#endif
 
 #ifdef CONFIG_PM
 /**

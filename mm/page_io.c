@@ -61,9 +61,12 @@ void end_swap_bio_write(struct bio *bio)
 		 * Also clear PG_reclaim to avoid rotate_reclaimable_page()
 		 */
 		set_page_dirty(page);
-		pr_alert("Write-error on swap-device (%u:%u:%llu)\n",
-			 MAJOR(bio_dev(bio)), MINOR(bio_dev(bio)),
+#ifndef CONFIG_ZRAM
+		pr_alert_ratelimited("Write-error on swap-device (%u:%u:%llu)\n",
+			 MAJOR(bio_dev(bio)),
+			 MINOR(bio_dev(bio)),
 			 (unsigned long long)bio->bi_iter.bi_sector);
+#endif
 		ClearPageReclaim(page);
 	}
 	end_page_writeback(page);
@@ -259,11 +262,6 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 	ret = __swap_writepage(page, wbc, end_swap_bio_write);
 out:
 	return ret;
-}
-
-static sector_t swap_page_sector(struct page *page)
-{
-	return (sector_t)__page_file_index(page) << (PAGE_SHIFT - 9);
 }
 
 static inline void count_swpout_vm_event(struct page *page)

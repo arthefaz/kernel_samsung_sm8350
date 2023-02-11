@@ -1107,7 +1107,8 @@ system_enable_read(struct file *filp, char __user *ubuf, size_t cnt,
 	mutex_lock(&event_mutex);
 	list_for_each_entry(file, &tr->events, list) {
 		call = file->event_call;
-		if (!trace_event_name(call) || !call->class || !call->class->reg)
+		if ((call->flags & TRACE_EVENT_FL_IGNORE_ENABLE) ||
+		    !trace_event_name(call) || !call->class || !call->class->reg)
 			continue;
 
 		if (system && strcmp(call->class->system, system->name) != 0)
@@ -3386,9 +3387,13 @@ function_test_events_call(unsigned long ip, unsigned long parent_ip,
 	entry	= ring_buffer_event_data(event);
 	entry->ip			= ip;
 	entry->parent_ip		= parent_ip;
-
+#ifdef CONFIG_CORESIGHT_QGKI
+	event_trigger_unlock_commit(&event_trace_file, buffer, event,
+				    entry, flags, pc, 0);
+#else
 	event_trigger_unlock_commit(&event_trace_file, buffer, event,
 				    entry, flags, pc);
+#endif
  out:
 	atomic_dec(&per_cpu(ftrace_test_event_disable, cpu));
 	preempt_enable_notrace();

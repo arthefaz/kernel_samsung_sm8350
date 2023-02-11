@@ -33,6 +33,7 @@
 #include <linux/percpu.h>
 #include <linux/splice.h>
 #include <linux/kdebug.h>
+#include <linux/sizes.h>
 #include <linux/string.h>
 #include <linux/mount.h>
 #include <linux/rwsem.h>
@@ -45,6 +46,9 @@
 #include <linux/trace.h>
 #include <linux/sched/clock.h>
 #include <linux/sched/rt.h>
+#include <linux/coresight-stm.h>
+
+#include <soc/qcom/minidump.h>
 
 #include "trace.h"
 #include "trace_output.h"
@@ -118,7 +122,13 @@ cpumask_var_t __read_mostly	tracing_buffer_mask;
  * Set 2 if you want to dump the buffer of the CPU that triggered oops
  */
 
+#ifdef CONFIG_QCOM_MINIDUMP_FTRACE
+enum ftrace_dump_mode ftrace_dump_on_oops = DUMP_ALL;
+static bool minidump_ftrace_in_oops;
+static bool minidump_ftrace_dump = true;
+#else
 enum ftrace_dump_mode ftrace_dump_on_oops;
+#endif
 
 /* When set, tracing will stop when a WARN*() is hit */
 int __disable_trace_on_warning;
@@ -1934,7 +1944,14 @@ void tracing_reset_all_online_cpus(void)
 	}
 }
 
+/*
+ * The tgid_map array maps from pid to tgid; i.e. the value stored at index i
+ * is the tgid last observed corresponding to pid=i.
+ */
 static int *tgid_map;
+
+/* The maximum valid index into tgid_map. */
+static size_t tgid_map_max;
 
 #define SAVED_CMDLINES_DEFAULT 128
 #define NO_CMDLINE_MAP UINT_MAX
@@ -1947,9 +1964,6 @@ struct saved_cmdlines_buffer {
 	char *saved_cmdlines;
 };
 static struct saved_cmdlines_buffer *savedcmd;
-
-/* temporary disable recording */
-static atomic_t trace_record_taskinfo_disabled __read_mostly;
 
 static inline char *get_saved_cmdlines(int idx)
 {
@@ -2140,14 +2154,13 @@ static void tracing_stop_tr(struct trace_array *tr)
 
 static int trace_save_cmdline(struct task_struct *tsk)
 {
-	unsigned pid, idx;
+	unsigned tpid, idx;
 
 	/* treat recording of idle task as a success */
 	if (!tsk->pid)
 		return 1;
 
-	if (unlikely(tsk->pid > PID_MAX_DEFAULT))
-		return 0;
+	tpid = tsk->pid & (PID_MAX_DEFAULT - 1);
 
 	/*
 	 * It's not the end of the world if we don't get
@@ -2158,26 +2171,15 @@ static int trace_save_cmdline(struct task_struct *tsk)
 	if (!arch_spin_trylock(&trace_cmdline_lock))
 		return 0;
 
-	idx = savedcmd->map_pid_to_cmdline[tsk->pid];
+	idx = savedcmd->map_pid_to_cmdline[tpid];
 	if (idx == NO_CMDLINE_MAP) {
 		idx = (savedcmd->cmdline_idx + 1) % savedcmd->cmdline_num;
 
-		/*
-		 * Check whether the cmdline buffer at idx has a pid
-		 * mapped. We are going to overwrite that entry so we
-		 * need to clear the map_pid_to_cmdline. Otherwise we
-		 * would read the new comm for the old pid.
-		 */
-		pid = savedcmd->map_cmdline_to_pid[idx];
-		if (pid != NO_CMDLINE_MAP)
-			savedcmd->map_pid_to_cmdline[pid] = NO_CMDLINE_MAP;
-
-		savedcmd->map_cmdline_to_pid[idx] = tsk->pid;
-		savedcmd->map_pid_to_cmdline[tsk->pid] = idx;
-
+		savedcmd->map_pid_to_cmdline[tpid] = idx;
 		savedcmd->cmdline_idx = idx;
 	}
 
+	savedcmd->map_cmdline_to_pid[idx] = tsk->pid;
 	set_cmdline(idx, tsk->comm);
 
 	arch_spin_unlock(&trace_cmdline_lock);
@@ -2188,6 +2190,7 @@ static int trace_save_cmdline(struct task_struct *tsk)
 static void __trace_find_cmdline(int pid, char comm[])
 {
 	unsigned map;
+	int tpid;
 
 	if (!pid) {
 		strcpy(comm, "<idle>");
@@ -2199,16 +2202,16 @@ static void __trace_find_cmdline(int pid, char comm[])
 		return;
 	}
 
-	if (pid > PID_MAX_DEFAULT) {
-		strcpy(comm, "<...>");
-		return;
+	tpid = pid & (PID_MAX_DEFAULT - 1);
+	map = savedcmd->map_pid_to_cmdline[tpid];
+	if (map != NO_CMDLINE_MAP) {
+		tpid = savedcmd->map_cmdline_to_pid[map];
+		if (tpid == pid) {
+			strlcpy(comm, get_saved_cmdlines(map), TASK_COMM_LEN);
+			return;
+		}
 	}
-
-	map = savedcmd->map_pid_to_cmdline[pid];
-	if (map != NO_CMDLINE_MAP)
-		strlcpy(comm, get_saved_cmdlines(map), TASK_COMM_LEN);
-	else
-		strcpy(comm, "<...>");
+	strcpy(comm, "<...>");
 }
 
 void trace_find_cmdline(int pid, char comm[])
@@ -2222,32 +2225,47 @@ void trace_find_cmdline(int pid, char comm[])
 	preempt_enable();
 }
 
+static int *trace_find_tgid_ptr(int pid)
+{
+	/*
+	 * Pairs with the smp_store_release in set_tracer_flag() to ensure that
+	 * if we observe a non-NULL tgid_map then we also observe the correct
+	 * tgid_map_max.
+	 */
+	int *map = smp_load_acquire(&tgid_map);
+
+	if (unlikely(!map || pid > tgid_map_max))
+		return NULL;
+
+	return &map[pid];
+}
+
 int trace_find_tgid(int pid)
 {
-	if (unlikely(!tgid_map || !pid || pid > PID_MAX_DEFAULT))
-		return 0;
+	int *ptr = trace_find_tgid_ptr(pid);
 
-	return tgid_map[pid];
+	return ptr ? *ptr : 0;
 }
 
 static int trace_save_tgid(struct task_struct *tsk)
 {
+	int *ptr;
+
 	/* treat recording of idle task as a success */
 	if (!tsk->pid)
 		return 1;
 
-	if (unlikely(!tgid_map || tsk->pid > PID_MAX_DEFAULT))
+	ptr = trace_find_tgid_ptr(tsk->pid);
+	if (!ptr)
 		return 0;
 
-	tgid_map[tsk->pid] = tsk->tgid;
+	*ptr = tsk->tgid;
 	return 1;
 }
 
 static bool tracing_record_taskinfo_skip(int flags)
 {
 	if (unlikely(!(flags & (TRACE_RECORD_CMDLINE | TRACE_RECORD_TGID))))
-		return true;
-	if (atomic_read(&trace_record_taskinfo_disabled) || !tracing_is_on())
 		return true;
 	if (!__this_cpu_read(trace_taskinfo_save))
 		return true;
@@ -2498,7 +2516,7 @@ trace_event_buffer_lock_reserve(struct ring_buffer **current_rb,
 	    (entry = this_cpu_read(trace_buffered_event))) {
 		/* Try to use the per cpu buffer first */
 		val = this_cpu_inc_return(trace_buffered_event_cnt);
-		if (val == 1) {
+		if ((len < (PAGE_SIZE - sizeof(*entry) - sizeof(entry->array[0]))) && val == 1) {
 			trace_event_setup(entry, type, flags, pc);
 			entry->array[0] = len;
 			return entry;
@@ -2587,15 +2605,26 @@ int tracepoint_printk_sysctl(struct ctl_table *table, int write,
 	return ret;
 }
 
+#ifdef CONFIG_CORESIGHT_QGKI
+void trace_event_buffer_commit(struct trace_event_buffer *fbuffer,
+			       unsigned long len)
+{
+	if (static_key_false(&tracepoint_printk_key.key))
+		output_printk(fbuffer);
+	event_trigger_unlock_commit(fbuffer->trace_file, fbuffer->buffer,
+				    fbuffer->event, fbuffer->entry,
+				    fbuffer->flags, fbuffer->pc, len);
+}
+#else
 void trace_event_buffer_commit(struct trace_event_buffer *fbuffer)
 {
 	if (static_key_false(&tracepoint_printk_key.key))
 		output_printk(fbuffer);
-
 	event_trigger_unlock_commit(fbuffer->trace_file, fbuffer->buffer,
 				    fbuffer->event, fbuffer->entry,
 				    fbuffer->flags, fbuffer->pc);
 }
+#endif
 EXPORT_SYMBOL_GPL(trace_event_buffer_commit);
 
 /*
@@ -2857,7 +2886,8 @@ static void __ftrace_trace_stack(struct ring_buffer *buffer,
 
 	size = nr_entries * sizeof(unsigned long);
 	event = __trace_buffer_lock_reserve(buffer, TRACE_STACK,
-					    sizeof(*entry) + size, flags, pc);
+				    (sizeof(*entry) - sizeof(entry->caller)) + size,
+				    flags, pc);
 	if (!event)
 		goto out;
 	entry = ring_buffer_event_data(event);
@@ -3205,6 +3235,7 @@ __trace_array_vprintk(struct ring_buffer *buffer,
 
 	memcpy(&entry->buf, tbuffer, len + 1);
 	if (!call_filter_check_discard(call, entry, buffer, event)) {
+		stm_log(OST_ENTITY_TRACE_PRINTK, entry->buf, len + 1);
 		__buffer_unlock_commit(buffer, event);
 		ftrace_trace_stack(&global_trace, buffer, flags, 6, pc, NULL);
 	}
@@ -3470,9 +3501,6 @@ static void *s_start(struct seq_file *m, loff_t *pos)
 		return ERR_PTR(-EBUSY);
 #endif
 
-	if (!iter->snapshot)
-		atomic_inc(&trace_record_taskinfo_disabled);
-
 	if (*pos != iter->pos) {
 		iter->ent = NULL;
 		iter->cpu = 0;
@@ -3514,9 +3542,6 @@ static void s_stop(struct seq_file *m, void *p)
 	if (iter->snapshot && iter->trace->use_max_tr)
 		return;
 #endif
-
-	if (!iter->snapshot)
-		atomic_dec(&trace_record_taskinfo_disabled);
 
 	trace_access_unlock(iter->cpu_file);
 	trace_event_read_unlock();
@@ -4604,6 +4629,8 @@ int trace_keep_overwrite(struct tracer *tracer, u32 mask, int set)
 
 int set_tracer_flag(struct trace_array *tr, unsigned int mask, int enabled)
 {
+	int *map;
+
 	if ((mask == TRACE_ITER_RECORD_TGID) ||
 	    (mask == TRACE_ITER_RECORD_CMD))
 		lockdep_assert_held(&event_mutex);
@@ -4626,10 +4653,19 @@ int set_tracer_flag(struct trace_array *tr, unsigned int mask, int enabled)
 		trace_event_enable_cmd_record(enabled);
 
 	if (mask == TRACE_ITER_RECORD_TGID) {
-		if (!tgid_map)
-			tgid_map = kvcalloc(PID_MAX_DEFAULT + 1,
-					   sizeof(*tgid_map),
-					   GFP_KERNEL);
+		if (!tgid_map) {
+			tgid_map_max = pid_max;
+			map = kvcalloc(tgid_map_max + 1, sizeof(*tgid_map),
+				       GFP_KERNEL);
+
+			/*
+			 * Pairs with smp_load_acquire() in
+			 * trace_find_tgid_ptr() to ensure that if it observes
+			 * the tgid_map we just allocated then it also observes
+			 * the corresponding tgid_map_max value.
+			 */
+			smp_store_release(&tgid_map, map);
+		}
 		if (!tgid_map) {
 			tr->trace_flags &= ~TRACE_ITER_RECORD_TGID;
 			return -ENOMEM;
@@ -4961,6 +4997,10 @@ static const char readme_msg[] =
 	"\t            [:name=histname1]\n"
 	"\t            [:<handler>.<action>]\n"
 	"\t            [if <filter>]\n\n"
+	"\t    Note, special fields can be used as well:\n"
+	"\t            common_timestamp - to record current timestamp\n"
+	"\t            common_cpu - to record the CPU the event happened on\n"
+	"\n"
 	"\t    When a matching event is hit, an entry is added to a hash\n"
 	"\t    table using the key(s) and value(s) named, and the value of a\n"
 	"\t    sum called 'hitcount' is incremented.  Keys and values\n"
@@ -5034,37 +5074,16 @@ static const struct file_operations tracing_readme_fops = {
 
 static void *saved_tgids_next(struct seq_file *m, void *v, loff_t *pos)
 {
-	int *ptr = v;
+	int pid = ++(*pos);
 
-	if (*pos || m->count)
-		ptr++;
-
-	(*pos)++;
-
-	for (; ptr <= &tgid_map[PID_MAX_DEFAULT]; ptr++) {
-		if (trace_find_tgid(*ptr))
-			return ptr;
-	}
-
-	return NULL;
+	return trace_find_tgid_ptr(pid);
 }
 
 static void *saved_tgids_start(struct seq_file *m, loff_t *pos)
 {
-	void *v;
-	loff_t l = 0;
+	int pid = *pos;
 
-	if (!tgid_map)
-		return NULL;
-
-	v = &tgid_map[0];
-	while (l <= *pos) {
-		v = saved_tgids_next(m, v, &l);
-		if (!v)
-			return NULL;
-	}
-
-	return v;
+	return trace_find_tgid_ptr(pid);
 }
 
 static void saved_tgids_stop(struct seq_file *m, void *v)
@@ -5073,9 +5092,14 @@ static void saved_tgids_stop(struct seq_file *m, void *v)
 
 static int saved_tgids_show(struct seq_file *m, void *v)
 {
-	int pid = (int *)v - tgid_map;
+	int *entry = (int *)v;
+	int pid = entry - tgid_map;
+	int tgid = *entry;
 
-	seq_printf(m, "%d %d\n", pid, trace_find_tgid(pid));
+	if (tgid == 0)
+		return SEQ_SKIP;
+
+	seq_printf(m, "%d %d\n", pid, tgid);
 	return 0;
 }
 
@@ -6446,8 +6470,11 @@ tracing_mark_write(struct file *filp, const char __user *ubuf,
 	if (entry->buf[cnt - 1] != '\n') {
 		entry->buf[cnt] = '\n';
 		entry->buf[cnt + 1] = '\0';
-	} else
+		stm_log(OST_ENTITY_TRACE_MARKER, entry->buf, cnt + 2);
+	} else {
 		entry->buf[cnt] = '\0';
+		stm_log(OST_ENTITY_TRACE_MARKER, entry->buf, cnt + 1);
+	}
 
 	__buffer_unlock_commit(buffer, event);
 
@@ -8841,11 +8868,32 @@ static __init int tracer_init_tracefs(void)
 	return 0;
 }
 
+#ifdef CONFIG_QCOM_MINIDUMP_FTRACE
+static bool trace_oops_enter(void)
+{
+	if (minidump_ftrace_in_oops)
+		return true;
+	minidump_ftrace_in_oops = true;
+	return false;
+}
+
+static void trace_oops_exit(void)
+{
+	minidump_ftrace_in_oops = false;
+}
+#else
+static bool trace_oops_enter(void) { return false; }
+static void trace_oops_exit(void) { }
+#endif
+
 static int trace_panic_handler(struct notifier_block *this,
 			       unsigned long event, void *unused)
 {
+	if (trace_oops_enter())
+		return NOTIFY_OK;
 	if (ftrace_dump_on_oops)
 		ftrace_dump(ftrace_dump_on_oops);
+	trace_oops_exit();
 	return NOTIFY_OK;
 }
 
@@ -8859,6 +8907,8 @@ static int trace_die_handler(struct notifier_block *self,
 			     unsigned long val,
 			     void *data)
 {
+	if (trace_oops_enter())
+		return NOTIFY_OK;
 	switch (val) {
 	case DIE_OOPS:
 		if (ftrace_dump_on_oops)
@@ -8867,6 +8917,7 @@ static int trace_die_handler(struct notifier_block *self,
 	default:
 		break;
 	}
+	trace_oops_exit();
 	return NOTIFY_OK;
 }
 
@@ -8888,6 +8939,19 @@ static struct notifier_block trace_die_notifier = {
  */
 #define KERN_TRACE		KERN_EMERG
 
+#ifdef CONFIG_QCOM_MINIDUMP_FTRACE
+static void trace_dump_seq_buffer(struct trace_seq *s)
+{
+	if (minidump_ftrace_in_oops && minidump_ftrace_dump)
+		minidump_add_trace_event(s->buffer, s->seq.len);
+}
+#else
+static void trace_dump_seq_buffer(struct trace_seq *s)
+{
+	printk(KERN_TRACE "%s", s->buffer);
+}
+#endif
+
 void
 trace_printk_seq(struct trace_seq *s)
 {
@@ -8906,7 +8970,7 @@ trace_printk_seq(struct trace_seq *s)
 	/* should be zero ended, but we are paranoid. */
 	s->buffer[s->seq.len] = 0;
 
-	printk(KERN_TRACE "%s", s->buffer);
+	trace_dump_seq_buffer(s);
 
 	trace_seq_init(s);
 }
@@ -8929,6 +8993,33 @@ void trace_init_global_iter(struct trace_iterator *iter)
 	if (trace_clocks[iter->tr->clock_id].in_ns)
 		iter->iter_flags |= TRACE_FILE_TIME_IN_NS;
 }
+
+#ifdef CONFIG_QCOM_MINIDUMP_FTRACE
+static void trace_check_size(struct trace_iterator iter, int cpu)
+{
+	unsigned long buffer_size;
+
+	if (!minidump_ftrace_dump)
+		return;
+	buffer_size = ring_buffer_size(iter.tr->trace_buffer.buffer, cpu);
+	if (buffer_size > (SZ_256K + PAGE_SIZE)) {
+		printk(KERN_TRACE "Skip md ftrace buffer dump for: %#lx\n",
+			buffer_size);
+		minidump_ftrace_dump = false;
+	}
+}
+
+static bool trace_skip_ftrace_dump(void)
+{
+	return !minidump_ftrace_dump;
+}
+#else
+static void trace_check_size(struct trace_iterator iter, int cpu) { }
+static bool trace_skip_ftrace_dump(void)
+{
+	return false;
+}
+#endif
 
 void ftrace_dump(enum ftrace_dump_mode oops_dump_mode)
 {
@@ -8964,6 +9055,7 @@ void ftrace_dump(enum ftrace_dump_mode oops_dump_mode)
 
 	for_each_tracing_cpu(cpu) {
 		atomic_inc(&per_cpu_ptr(iter.trace_buffer->data, cpu)->disabled);
+		trace_check_size(iter, cpu);
 	}
 
 	old_userobj = tr->trace_flags & TRACE_ITER_SYM_USEROBJ;
@@ -8971,6 +9063,8 @@ void ftrace_dump(enum ftrace_dump_mode oops_dump_mode)
 	/* don't look at user memory in panic mode */
 	tr->trace_flags &= ~TRACE_ITER_SYM_USEROBJ;
 
+	if (trace_skip_ftrace_dump())
+		goto out_enable;
 	switch (oops_dump_mode) {
 	case DUMP_ALL:
 		iter.cpu_file = RING_BUFFER_ALL_CPUS;
@@ -9008,7 +9102,9 @@ void ftrace_dump(enum ftrace_dump_mode oops_dump_mode)
 		cnt++;
 
 		trace_iterator_reset(&iter);
-		iter.iter_flags |= TRACE_FILE_LAT_FMT;
+		/* Minidump ftraces need absolute event timestamp */
+		if (!IS_ENABLED(CONFIG_QCOM_MINIDUMP_FTRACE))
+			iter.iter_flags |= TRACE_FILE_LAT_FMT;
 
 		if (trace_find_next_entry_inc(&iter) != NULL) {
 			int ret;

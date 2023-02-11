@@ -57,6 +57,8 @@
 #include <linux/wait.h>
 #include <linux/pagemap.h>
 #include <linux/fs.h>
+#include <linux/swap.h>
+#include <linux/jiffies.h>
 
 #define ZSPAGE_MAGIC	0x58
 
@@ -346,8 +348,8 @@ static void destroy_cache(struct zs_pool *pool)
 
 static unsigned long cache_alloc_handle(struct zs_pool *pool, gfp_t gfp)
 {
-	return (unsigned long)kmem_cache_alloc(pool->handle_cachep,
-			gfp & ~(__GFP_HIGHMEM|__GFP_MOVABLE));
+	return (unsigned long)kmem_cache_alloc(pool->handle_cachep, gfp &
+		~(__GFP_HIGHMEM|__GFP_MOVABLE|__GFP_CMA|__GFP_OFFLINABLE));
 }
 
 static void cache_free_handle(struct zs_pool *pool, unsigned long handle)
@@ -357,8 +359,8 @@ static void cache_free_handle(struct zs_pool *pool, unsigned long handle)
 
 static struct zspage *cache_alloc_zspage(struct zs_pool *pool, gfp_t flags)
 {
-	return kmem_cache_alloc(pool->zspage_cachep,
-			flags & ~(__GFP_HIGHMEM|__GFP_MOVABLE));
+	return kmem_cache_alloc(pool->zspage_cachep, flags &
+		~(__GFP_HIGHMEM|__GFP_MOVABLE|__GFP_CMA|__GFP_OFFLINABLE));
 }
 
 static void cache_free_zspage(struct zs_pool *pool, struct zspage *zspage)
@@ -2216,11 +2218,13 @@ static unsigned long zs_can_compact(struct size_class *class)
 	return obj_wasted * class->pages_per_zspage;
 }
 
-static void __zs_compact(struct zs_pool *pool, struct size_class *class)
+static unsigned long __zs_compact(struct zs_pool *pool,
+				  struct size_class *class)
 {
 	struct zs_compact_control cc;
 	struct zspage *src_zspage;
 	struct zspage *dst_zspage = NULL;
+	unsigned long pages_freed = 0;
 
 	spin_lock(&class->lock);
 	while ((src_zspage = isolate_zspage(class, true))) {
@@ -2250,7 +2254,7 @@ static void __zs_compact(struct zs_pool *pool, struct size_class *class)
 		putback_zspage(class, dst_zspage);
 		if (putback_zspage(class, src_zspage) == ZS_EMPTY) {
 			free_zspage(pool, class, src_zspage);
-			pool->stats.pages_compacted += class->pages_per_zspage;
+			pages_freed += class->pages_per_zspage;
 		}
 		spin_unlock(&class->lock);
 		cond_resched();
@@ -2261,12 +2265,15 @@ static void __zs_compact(struct zs_pool *pool, struct size_class *class)
 		putback_zspage(class, src_zspage);
 
 	spin_unlock(&class->lock);
+
+	return pages_freed;
 }
 
 unsigned long zs_compact(struct zs_pool *pool)
 {
 	int i;
 	struct size_class *class;
+	unsigned long pages_freed = 0;
 
 	for (i = ZS_SIZE_CLASSES - 1; i >= 0; i--) {
 		class = pool->size_class[i];
@@ -2274,10 +2281,11 @@ unsigned long zs_compact(struct zs_pool *pool)
 			continue;
 		if (class->index != i)
 			continue;
-		__zs_compact(pool, class);
+		pages_freed += __zs_compact(pool, class);
 	}
+	atomic_long_add(pages_freed, &pool->stats.pages_compacted);
 
-	return pool->stats.pages_compacted;
+	return pages_freed;
 }
 EXPORT_SYMBOL_GPL(zs_compact);
 
@@ -2294,16 +2302,18 @@ static unsigned long zs_shrinker_scan(struct shrinker *shrinker,
 	struct zs_pool *pool = container_of(shrinker, struct zs_pool,
 			shrinker);
 
-	pages_freed = pool->stats.pages_compacted;
 	/*
 	 * Compact classes and calculate compaction delta.
 	 * Can run concurrently with a manually triggered
 	 * (by user) compaction.
 	 */
-	pages_freed = zs_compact(pool) - pages_freed;
+	pages_freed = zs_compact(pool);
 
 	return pages_freed ? pages_freed : SHRINK_STOP;
 }
+
+#define ZS_SHRINKER_THRESHOLD	1024
+#define ZS_SHRINKER_INTERVAL	10
 
 static unsigned long zs_shrinker_count(struct shrinker *shrinker,
 		struct shrink_control *sc)
@@ -2313,6 +2323,10 @@ static unsigned long zs_shrinker_count(struct shrinker *shrinker,
 	unsigned long pages_to_free = 0;
 	struct zs_pool *pool = container_of(shrinker, struct zs_pool,
 			shrinker);
+	static unsigned long time_stamp;
+
+	if (!current_is_kswapd() || time_is_after_jiffies(time_stamp))
+		return 0;
 
 	for (i = ZS_SIZE_CLASSES - 1; i >= 0; i--) {
 		class = pool->size_class[i];
@@ -2323,6 +2337,11 @@ static unsigned long zs_shrinker_count(struct shrinker *shrinker,
 
 		pages_to_free += zs_can_compact(class);
 	}
+
+	if (pages_to_free > ZS_SHRINKER_THRESHOLD)
+		time_stamp = jiffies + (ZS_SHRINKER_INTERVAL * HZ);
+	else
+		pages_to_free = 0;
 
 	return pages_to_free;
 }

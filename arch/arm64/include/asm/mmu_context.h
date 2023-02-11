@@ -23,24 +23,30 @@
 #include <asm/pgtable.h>
 #include <asm/sysreg.h>
 #include <asm/tlbflush.h>
+#include <linux/msm_rtb.h>
 
 extern bool rodata_full;
 
 static inline void contextidr_thread_switch(struct task_struct *next)
 {
+	pid_t pid = task_pid_nr(next);
+
 	if (!IS_ENABLED(CONFIG_PID_IN_CONTEXTIDR))
 		return;
 
-	write_sysreg(task_pid_nr(next), contextidr_el1);
+	write_sysreg(pid, contextidr_el1);
 	isb();
+
+	uncached_logk(LOGK_CTXID, (void *)(u64)pid);
+
 }
 
 /*
- * Set TTBR0 to empty_zero_page. No translations will be possible via TTBR0.
+ * Set TTBR0 to reserved_pg_dir. No translations will be possible via TTBR0.
  */
 static inline void cpu_set_reserved_ttbr0(void)
 {
-	unsigned long ttbr = phys_to_ttbr(__pa_symbol(empty_zero_page));
+	unsigned long ttbr = phys_to_ttbr(__pa_symbol(reserved_pg_dir));
 
 	write_sysreg(ttbr, ttbr0_el1);
 	isb();
@@ -63,10 +69,7 @@ extern u64 idmap_ptrs_per_pgd;
 
 static inline bool __cpu_uses_extended_idmap(void)
 {
-	if (IS_ENABLED(CONFIG_ARM64_VA_BITS_52))
-		return false;
-
-	return unlikely(idmap_t0sz != TCR_T0SZ(VA_BITS));
+	return unlikely(idmap_t0sz != TCR_T0SZ(vabits_actual));
 }
 
 /*
@@ -187,9 +190,9 @@ static inline void update_saved_ttbr0(struct task_struct *tsk,
 		return;
 
 	if (mm == &init_mm)
-		ttbr = __pa_symbol(empty_zero_page);
+		ttbr = phys_to_ttbr(__pa_symbol(reserved_pg_dir));
 	else
-		ttbr = virt_to_phys(mm->pgd) | ASID(mm) << 48;
+		ttbr = phys_to_ttbr(virt_to_phys(mm->pgd)) | ASID(mm) << 48;
 
 	WRITE_ONCE(task_thread_info(tsk)->ttbr0, ttbr);
 }

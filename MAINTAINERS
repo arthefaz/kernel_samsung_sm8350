@@ -6158,11 +6158,6 @@ F:	include/trace/events/mdio.h
 F:	include/uapi/linux/mdio.h
 F:	include/uapi/linux/mii.h
 
-EXFAT FILE SYSTEM
-M:	Valdis Kletnieks <valdis.kletnieks@vt.edu>
-S:	Maintained
-F:	drivers/staging/exfat/
-
 EXT2 FILE SYSTEM
 M:	Jan Kara <jack@suse.com>
 L:	linux-ext4@vger.kernel.org
@@ -7992,12 +7987,6 @@ F:	drivers/iio/
 F:	drivers/staging/iio/
 F:	include/linux/iio/
 F:	tools/iio/
-
-IIO SCMI BASED DRIVER
-M:	Jyoti Bhayana <jbhayana@google.com>
-L:	linux-iio@vger.kernel.org
-S:	Maintained
-F:	drivers/iio/common/scmi_sensors/scmi_iio.c
 
 IIO UNIT CONVERTER
 M:	Peter Rosin <peda@axentia.se>
@@ -15765,8 +15754,6 @@ F:	drivers/firmware/arm_scpi.c
 F:	drivers/firmware/arm_scmi/
 F:	drivers/reset/reset-scmi.c
 F:	include/linux/sc[mp]i_protocol.h
-F:	include/trace/events/scmi.h
-F:	include/uapi/linux/virtio_scmi.h
 
 SYSTEM RESET/SHUTDOWN DRIVERS
 M:	Sebastian Reichel <sre@kernel.org>
@@ -17355,13 +17342,6 @@ L:	virtualization@lists.linux-foundation.org
 S:	Maintained
 F:	drivers/iommu/virtio-iommu.c
 F:	include/uapi/linux/virtio_iommu.h
-
-VIRTIO SOUND DRIVER
-M:	Anton Yakovlev <anton.yakovlev@opensynergy.com>
-L:	virtualization@lists.linux-foundation.org
-S:	Maintained
-F:	sound/virtio/
-F:	include/uapi/linux/virtio_snd.h
 
 VIRTUAL BOX GUEST DEVICE DRIVER
 M:	Hans de Goede <hdegoede@redhat.com>

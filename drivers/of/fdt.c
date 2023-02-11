@@ -501,11 +501,11 @@ static int __init __reserved_mem_reserve_reg(unsigned long node,
 
 		if (size &&
 		    early_init_dt_reserve_memory_arch(base, size, nomap) == 0)
-			pr_debug("Reserved memory: reserved region for node '%s': base %pa, size %ld MiB\n",
-				uname, &base, (unsigned long)size / SZ_1M);
+			pr_debug("Reserved memory: reserved region for node '%s': base %pa, size %lu MiB\n",
+				uname, &base, (unsigned long)(size / SZ_1M));
 		else
-			pr_info("Reserved memory: failed to reserve memory for node '%s': base %pa, size %ld MiB\n",
-				uname, &base, (unsigned long)size / SZ_1M);
+			pr_info("Reserved memory: failed to reserve memory for node '%s': base %pa, size %lu MiB\n",
+				uname, &base, (unsigned long)(size / SZ_1M));
 
 		len -= t_len;
 		if (first) {
@@ -591,16 +591,21 @@ void __init early_init_fdt_scan_reserved_mem(void)
 	if (!initial_boot_params)
 		return;
 
+	memblock_memsize_disable_tracking();
+
 	/* Process header /memreserve/ fields */
 	for (n = 0; ; n++) {
 		fdt_get_mem_rsv(initial_boot_params, n, &base, &size);
 		if (!size)
 			break;
 		early_init_dt_reserve_memory_arch(base, size, false);
+		memblock_memsize_record(NULL, base, size, 0, 0);
 	}
 
 	of_scan_flat_dt(__fdt_scan_reserved_mem, NULL);
 	fdt_init_reserved_mem();
+
+	memblock_memsize_enable_tracking();
 }
 
 /**
@@ -1037,7 +1042,7 @@ int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
 				base, base + size);
 	}
 
-	return 0;
+	return 1;
 }
 
 /*
@@ -1223,7 +1228,10 @@ void __init early_init_dt_scan_nodes(void)
 	of_scan_flat_dt(early_init_dt_scan_root, NULL);
 
 	/* Setup memory, calling early_init_dt_add_memory_arch */
+	memblock_memsize_disable_tracking();
 	of_scan_flat_dt(early_init_dt_scan_memory, NULL);
+	memblock_memsize_enable_tracking();
+	memblock_memsize_detect_hole();
 }
 
 bool __init early_init_dt_scan(void *params)

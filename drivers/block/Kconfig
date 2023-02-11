@@ -230,7 +230,7 @@ config BLK_DEV_LOOP_MIN_COUNT
 	  dynamically allocated with the /dev/loop-control interface.
 
 config BLK_DEV_CRYPTOLOOP
-	tristate "Cryptoloop Support"
+	tristate "Cryptoloop Support (DEPRECATED)"
 	select CRYPTO
 	select CRYPTO_CBC
 	depends on BLK_DEV_LOOP
@@ -242,7 +242,7 @@ config BLK_DEV_CRYPTOLOOP
 	  WARNING: This device is not safe for journaled file systems like
 	  ext3 or Reiserfs. Please use the Device Mapper crypto module
 	  instead, which can be configured to be on-disk compatible with the
-	  cryptoloop device.
+	  cryptoloop device.  cryptoloop support will be removed in Linux 5.16.
 
 source "drivers/block/drbd/Kconfig"
 
@@ -432,6 +432,15 @@ config VIRTIO_BLK
 	  This is the virtual block driver for virtio.  It can be used with
           QEMU based VMMs (like KVM or Xen).  Say Y or M.
 
+config VIRTIO_BLK_QTI_CRYPTO
+	tristate "Vendor specific VIRTIO Crypto Engine Support"
+	depends on VIRTIO_BLK
+	help
+	 Enable storage inline crypto engine support for guest virtual machine.
+	 Enabling this allows kernel to use crypto operations defined
+	 and implemented by QTI.
+	 Say Y or M.
+
 config VIRTIO_BLK_SCSI
 	bool "SCSI passthrough request for the Virtio block driver"
 	depends on VIRTIO_BLK
@@ -461,11 +470,43 @@ config BLK_DEV_RBD
 config BLK_DEV_RSXX
 	tristate "IBM Flash Adapter 900GB Full Height PCIe Device Driver"
 	depends on PCI
+	select CRC32
 	help
 	  Device driver for IBM's high speed PCIe SSD
 	  storage device: Flash Adapter 900GB Full Height.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called rsxx.
+
+config NEURON_APP_BLOCK_CLIENT
+	tristate "Neuron block client"
+	depends on NEURON
+	select NEURON_PROT_BLOCK_CLIENT
+	help
+	  Neuron is a device-sharing framework which is used by guests of the
+	  haven hypervisor to serve or access shared I/O devices and other
+	  inter-VM services.
+
+	  This option enables the Neuron block client, which can access block
+	  devices that are shared via Neuron services. These shared devices can
+	  then be accessed as block device special files such as
+	  /dev/neuron-block0, either directly or by mounting filesystems
+	  on them.
+
+	  If unsure, say N.
+
+config NEURON_APP_BLOCK_SERVER
+	tristate "Neuron block server"
+	depends on NEURON
+	select NEURON_PROT_BLOCK_SERVER
+	help
+	  Neuron is a device-sharing framework which is used by guests of the
+	  haven hypervisors to serve or access shared I/O devices and other
+	  inter-VM services.
+
+	  This option enables the Neuron block device server, which exposes a
+	  specified block device to a client in another VM via a Neuron service.
+
+	  If unsure, say N.
 
 endif # BLK_DEV

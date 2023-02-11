@@ -405,6 +405,19 @@ config BATTERY_TWL4030_MADC
 	  Say Y here to enable this dumb driver for batteries managed
 	  through the TWL4030 MADC.
 
+config QTI_BATTERY_CHARGER
+	tristate "QTI Glink battery charger"
+	depends on QTI_PMIC_GLINK && EXTCON
+	help
+	  Say Y here to enable Qualcomm Technologies, Inc. battery charger
+	  driver which interfaces with the charger firmware running on the
+	  remote subsystem (e.g. DSP) by communicating over PMIC Glink channel
+	  and provides information about the battery, USB and wireless charging
+	  by exposing them as power supply devices.
+
+	  To compile the driver as a module, choose M here: the module will be
+	  called qti_battery_charger.
+
 config CHARGER_88PM860X
 	tristate "Marvell 88PM860x Charger driver"
 	depends on MFD_88PM860X && BATTERY_88PM860X
@@ -643,7 +656,8 @@ config BATTERY_GOLDFISH
 
 config BATTERY_RT5033
 	tristate "RT5033 fuel gauge support"
-	depends on MFD_RT5033
+	depends on I2C
+	select REGMAP_I2C
 	help
 	  This adds support for battery fuel gauge in Richtek RT5033 PMIC.
 	  The fuelgauge calculates and determines the battery state of charge
@@ -709,5 +723,7 @@ config CHARGER_WILCO
 	  by the Embedded Controller on the Chromebook named Wilco. Further
 	  information can be found in
 	  Documentation/ABI/testing/sysfs-class-power-wilco
+
+source "drivers/power/supply/qcom/Kconfig"
 
 endif # POWER_SUPPLY

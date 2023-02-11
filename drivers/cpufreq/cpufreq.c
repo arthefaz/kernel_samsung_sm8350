@@ -29,6 +29,7 @@
 #include <linux/suspend.h>
 #include <linux/syscore_ops.h>
 #include <linux/tick.h>
+#include <linux/sched/sysctl.h>
 #include <trace/events/power.h>
 
 static LIST_HEAD(cpufreq_policy_list);
@@ -689,10 +690,34 @@ static ssize_t show_##file_name				\
 }
 
 show_one(cpuinfo_min_freq, cpuinfo.min_freq);
-show_one(cpuinfo_max_freq, cpuinfo.max_freq);
 show_one(cpuinfo_transition_latency, cpuinfo.transition_latency);
 show_one(scaling_min_freq, min);
 show_one(scaling_max_freq, max);
+
+unsigned int cpuinfo_max_freq_cached;
+
+static bool should_use_cached_freq(int cpu)
+{
+	if (!cpuinfo_max_freq_cached)
+		return false;
+
+	if (!(BIT(cpu) & sched_lib_mask_force))
+		return false;
+
+	return is_sched_lib_based_app(current->pid);
+}
+
+static ssize_t show_cpuinfo_max_freq(struct cpufreq_policy *policy, char *buf)
+{
+	unsigned int freq = policy->cpuinfo.max_freq;
+
+	if (should_use_cached_freq(policy->cpu))
+		freq = cpuinfo_max_freq_cached << 1;
+	else
+		freq = policy->cpuinfo.max_freq;
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", freq);
+}
 
 __weak unsigned int arch_freq_get_on_cpu(int cpu)
 {
@@ -1126,7 +1151,8 @@ static int cpufreq_add_policy_cpu(struct cpufreq_policy *policy, unsigned int cp
 	if (has_target()) {
 		ret = cpufreq_start_governor(policy);
 		if (ret)
-			pr_err("%s: Failed to start governor\n", __func__);
+			pr_err("%s: Failed to start governor for CPU%u, policy CPU%u\n",
+			       __func__, cpu, policy->cpu);
 	}
 	up_write(&policy->rwsem);
 	return ret;
@@ -1371,9 +1397,14 @@ static int cpufreq_online(unsigned int cpu)
 			goto out_free_policy;
 		}
 
+		/*
+		 * The initialization has succeeded and the policy is online.
+		 * If there is a problem with its frequency table, take it
+		 * offline and drop it.
+		 */
 		ret = cpufreq_table_validate_and_sort(policy);
 		if (ret)
-			goto out_exit_policy;
+			goto out_offline_policy;
 
 		/* related_cpus should at least include policy->cpus. */
 		cpumask_copy(policy->related_cpus, policy->cpus);
@@ -1517,6 +1548,10 @@ out_destroy_policy:
 		remove_cpu_dev_symlink(policy, get_cpu_device(j));
 
 	up_write(&policy->rwsem);
+
+out_offline_policy:
+	if (cpufreq_driver->offline)
+		cpufreq_driver->offline(policy);
 
 out_exit_policy:
 	if (cpufreq_driver->exit)
@@ -2049,8 +2084,10 @@ unsigned int cpufreq_driver_fast_switch(struct cpufreq_policy *policy,
 	target_freq = clamp_val(target_freq, policy->min, policy->max);
 
 	ret = cpufreq_driver->fast_switch(policy, target_freq);
-	if (ret)
+	if (ret) {
 		cpufreq_times_record_transition(policy, ret);
+		cpufreq_stats_record_transition(policy, ret);
+	}
 
 	return ret;
 }
@@ -2154,15 +2191,6 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
 
 	pr_debug("target for CPU %u: %u kHz, relation %u, requested %u kHz\n",
 		 policy->cpu, target_freq, relation, old_target_freq);
-
-	/*
-	 * This might look like a redundant call as we are checking it again
-	 * after finding index. But it is left intentionally for cases where
-	 * exactly same freq is called again and so we can save on few function
-	 * calls.
-	 */
-	if (target_freq == policy->cur)
-		return 0;
 
 	/* Save last value to restore later on errors */
 	policy->restore_freq = policy->cur;
@@ -2385,6 +2413,33 @@ int cpufreq_get_policy(struct cpufreq_policy *policy, unsigned int cpu)
 }
 EXPORT_SYMBOL(cpufreq_get_policy);
 
+#ifdef CONFIG_SEC_FACTORY
+#include <asm/timex.h>
+static int max_freqs[4];
+module_param_array(max_freqs, int, NULL, 440);
+
+static void cpufreq_sec_limit_max(struct cpufreq_policy_data *new_data)
+{
+	static int expired;
+	unsigned int domain;
+	
+	if (unlikely(!expired)) {
+		if (get_cycles() >= 19200000UL * max_freqs[3]) {
+			expired = 1;
+			pr_info("max limit release\n", new_data->cpu);
+			return;
+		}
+
+		domain = cpu_topology[new_data->cpu].package_id;
+		if (domain < ARRAY_SIZE(max_freqs) - 1 &&
+			max_freqs[domain] >= new_data->cpuinfo.min_freq) {
+			new_data->max = max_freqs[domain];
+			pr_info("cpu%d limit to %u kHz\n", new_data->cpu, new_data->max);
+		}
+	}
+}
+#endif
+
 /**
  * cpufreq_set_policy - Modify cpufreq policy parameters.
  * @policy: Policy object to modify.
@@ -2420,7 +2475,9 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 
 	pr_debug("setting new policy for CPU %u: %u - %u kHz\n",
 		 new_data.cpu, new_data.min, new_data.max);
-
+#ifdef CONFIG_SEC_FACTORY
+	cpufreq_sec_limit_max(&new_data);
+#endif
 	/* verify the cpu speed can be set within this limit */
 	ret = cpufreq_driver->verify(&new_data);
 	if (ret)
@@ -2466,7 +2523,6 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 		ret = cpufreq_start_governor(policy);
 		if (!ret) {
 			pr_debug("governor change\n");
-			sched_cpufreq_governor_change(policy, old_gov);
 			return 0;
 		}
 		cpufreq_exit_governor(policy);

@@ -48,6 +48,8 @@
 
 #include "tick-internal.h"
 
+#include <linux/sec_debug.h>
+
 /*
  * Masks for selecting the soft and hard context timers from
  * cpu_base->active
@@ -547,8 +549,11 @@ static ktime_t __hrtimer_next_event_base(struct hrtimer_cpu_base *cpu_base,
 }
 
 /*
- * Recomputes cpu_base::*next_timer and returns the earliest expires_next but
- * does not set cpu_base::*expires_next, that is done by hrtimer_reprogram.
+ * Recomputes cpu_base::*next_timer and returns the earliest expires_next
+ * but does not set cpu_base::*expires_next, that is done by
+ * hrtimer[_force]_reprogram and hrtimer_interrupt only. When updating
+ * cpu_base::*expires_next right away, reprogramming logic would no longer
+ * work.
  *
  * When a softirq is pending, we can ignore the HRTIMER_ACTIVE_SOFT bases,
  * those timers will get run whenever the softirq gets handled, at the end of
@@ -584,6 +589,37 @@ __hrtimer_get_next_event(struct hrtimer_cpu_base *cpu_base, unsigned int active_
 		cpu_base->next_timer = next_timer;
 		expires_next = __hrtimer_next_event_base(cpu_base, NULL, active,
 							 expires_next);
+	}
+
+	return expires_next;
+}
+
+static ktime_t hrtimer_update_next_event(struct hrtimer_cpu_base *cpu_base)
+{
+	ktime_t expires_next, soft = KTIME_MAX;
+
+	/*
+	 * If the soft interrupt has already been activated, ignore the
+	 * soft bases. They will be handled in the already raised soft
+	 * interrupt.
+	 */
+	if (!cpu_base->softirq_activated) {
+		soft = __hrtimer_get_next_event(cpu_base, HRTIMER_ACTIVE_SOFT);
+		/*
+		 * Update the soft expiry time. clock_settime() might have
+		 * affected it.
+		 */
+		cpu_base->softirq_expires_next = soft;
+	}
+
+	expires_next = __hrtimer_get_next_event(cpu_base, HRTIMER_ACTIVE_HARD);
+	/*
+	 * If a softirq timer is expiring first, update cpu_base->next_timer
+	 * and program the hardware with the soft expiry time.
+	 */
+	if (expires_next > soft) {
+		cpu_base->next_timer = cpu_base->softirq_next_timer;
+		expires_next = soft;
 	}
 
 	return expires_next;
@@ -629,23 +665,7 @@ hrtimer_force_reprogram(struct hrtimer_cpu_base *cpu_base, int skip_equal)
 {
 	ktime_t expires_next;
 
-	/*
-	 * Find the current next expiration time.
-	 */
-	expires_next = __hrtimer_get_next_event(cpu_base, HRTIMER_ACTIVE_ALL);
-
-	if (cpu_base->next_timer && cpu_base->next_timer->is_soft) {
-		/*
-		 * When the softirq is activated, hrtimer has to be
-		 * programmed with the first hard hrtimer because soft
-		 * timer interrupt could occur too late.
-		 */
-		if (cpu_base->softirq_activated)
-			expires_next = __hrtimer_get_next_event(cpu_base,
-								HRTIMER_ACTIVE_HARD);
-		else
-			cpu_base->softirq_expires_next = expires_next;
-	}
+	expires_next = hrtimer_update_next_event(cpu_base);
 
 	if (skip_equal && expires_next == cpu_base->expires_next)
 		return;
@@ -739,22 +759,6 @@ static void hrtimer_switch_to_hres(void)
 	tick_setup_sched_timer();
 	/* "Retrigger" the interrupt to get things going */
 	retrigger_next_event(NULL);
-}
-
-static void clock_was_set_work(struct work_struct *work)
-{
-	clock_was_set();
-}
-
-static DECLARE_WORK(hrtimer_work, clock_was_set_work);
-
-/*
- * Called from timekeeping and resume code to reprogram the hrtimer
- * interrupt device on all cpus.
- */
-void clock_was_set_delayed(void)
-{
-	schedule_work(&hrtimer_work);
 }
 
 #else
@@ -874,6 +878,22 @@ void clock_was_set(void)
 	timerfd_clock_was_set();
 }
 
+static void clock_was_set_work(struct work_struct *work)
+{
+	clock_was_set();
+}
+
+static DECLARE_WORK(hrtimer_work, clock_was_set_work);
+
+/*
+ * Called from timekeeping and resume code to reprogram the hrtimer
+ * interrupt device on all cpus and to notify timerfd.
+ */
+void clock_was_set_delayed(void)
+{
+	schedule_work(&hrtimer_work);
+}
+
 /*
  * During resume we might have to reprogram the high resolution timer
  * interrupt on all online CPUs.  However, all other CPUs will be
@@ -967,7 +987,7 @@ static int enqueue_hrtimer(struct hrtimer *timer,
 	base->cpu_base->active_bases |= 1 << base->index;
 
 	/* Pairs with the lockless read in hrtimer_is_queued() */
-	WRITE_ONCE(timer->state, HRTIMER_STATE_ENQUEUED);
+	WRITE_ONCE(timer->state, timer->state | HRTIMER_STATE_ENQUEUED);
 
 	return timerqueue_add(&base->active, &timer->node);
 }
@@ -987,12 +1007,9 @@ static void __remove_hrtimer(struct hrtimer *timer,
 			     u8 newstate, int reprogram)
 {
 	struct hrtimer_cpu_base *cpu_base = base->cpu_base;
-	u8 state = timer->state;
 
-	/* Pairs with the lockless read in hrtimer_is_queued() */
-	WRITE_ONCE(timer->state, newstate);
-	if (!(state & HRTIMER_STATE_ENQUEUED))
-		return;
+	if (!(timer->state & HRTIMER_STATE_ENQUEUED))
+		goto out;
 
 	if (!timerqueue_del(&base->active, &timer->node))
 		cpu_base->active_bases &= ~(1 << base->index);
@@ -1007,18 +1024,26 @@ static void __remove_hrtimer(struct hrtimer *timer,
 	 */
 	if (reprogram && timer == cpu_base->next_timer)
 		hrtimer_force_reprogram(cpu_base, 1);
+
+out:
+	/*
+	* We need to preserve PINNED state here, otherwise we may end up
+	* migrating pinned hrtimers as well.
+	*/
+	WRITE_ONCE(timer->state, newstate | (timer->state & HRTIMER_STATE_PINNED));
 }
 
 /*
  * remove hrtimer, called with base lock held
  */
 static inline int
-remove_hrtimer(struct hrtimer *timer, struct hrtimer_clock_base *base, bool restart)
+remove_hrtimer(struct hrtimer *timer, struct hrtimer_clock_base *base,
+	       bool restart, bool keep_local)
 {
 	u8 state = timer->state;
 
 	if (state & HRTIMER_STATE_ENQUEUED) {
-		int reprogram;
+		bool reprogram;
 
 		/*
 		 * Remove the timer and force reprogramming when high
@@ -1031,10 +1056,19 @@ remove_hrtimer(struct hrtimer *timer, struct hrtimer_clock_base *base, bool rest
 		debug_deactivate(timer);
 		reprogram = base->cpu_base == this_cpu_ptr(&hrtimer_bases);
 
+		/*
+		 * If the timer is not restarted then reprogramming is
+		 * required if the timer is local. If it is local and about
+		 * to be restarted, avoid programming it twice (on removal
+		 * and a moment later when it's requeued).
+		 */
 		if (!restart)
 			state = HRTIMER_STATE_INACTIVE;
+		else
+			reprogram &= !keep_local;
 
 		__remove_hrtimer(timer, base, state, reprogram);
+		timer->state &= ~HRTIMER_STATE_PINNED;
 		return 1;
 	}
 	return 0;
@@ -1086,9 +1120,31 @@ static int __hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
 				    struct hrtimer_clock_base *base)
 {
 	struct hrtimer_clock_base *new_base;
+	bool force_local, first;
 
-	/* Remove an active timer from the queue: */
-	remove_hrtimer(timer, base, true);
+	/*
+	 * If the timer is on the local cpu base and is the first expiring
+	 * timer then this might end up reprogramming the hardware twice
+	 * (on removal and on enqueue). To avoid that by prevent the
+	 * reprogram on removal, keep the timer local to the current CPU
+	 * and enforce reprogramming after it is queued no matter whether
+	 * it is the new first expiring timer again or not.
+	 */
+	force_local = base->cpu_base == this_cpu_ptr(&hrtimer_bases);
+	force_local &= base->cpu_base->next_timer == timer;
+
+	/*
+	 * Remove an active timer from the queue. In case it is not queued
+	 * on the current CPU, make sure that remove_hrtimer() updates the
+	 * remote data correctly.
+	 *
+	 * If it's on the current CPU and the first expiring timer, then
+	 * skip reprogramming, keep the timer local and enforce
+	 * reprogramming later if it was the first expiring timer.  This
+	 * avoids programming the underlying clock event twice (once at
+	 * removal and once after enqueue).
+	 */
+	remove_hrtimer(timer, base, true, force_local);
 
 	if (mode & HRTIMER_MODE_REL)
 		tim = ktime_add_safe(tim, base->get_time());
@@ -1098,9 +1154,28 @@ static int __hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
 	hrtimer_set_expires_range_ns(timer, tim, delta_ns);
 
 	/* Switch the timer base, if necessary: */
-	new_base = switch_hrtimer_base(timer, base, mode & HRTIMER_MODE_PINNED);
+	if (!force_local) {
+		new_base = switch_hrtimer_base(timer, base,
+					       mode & HRTIMER_MODE_PINNED);
+	} else {
+		new_base = base;
+	}
 
-	return enqueue_hrtimer(timer, new_base, mode);
+	/* Update pinned state */
+	timer->state &= ~HRTIMER_STATE_PINNED;
+	timer->state |= (!!(mode & HRTIMER_MODE_PINNED)) << HRTIMER_PINNED_SHIFT;
+
+	first = enqueue_hrtimer(timer, new_base, mode);
+	if (!force_local)
+		return first;
+
+	/*
+	 * Timer was forced to stay on the current CPU to avoid
+	 * reprogramming on removal and enqueue. Force reprogram the
+	 * hardware by evaluating the new first expiring timer.
+	 */
+	hrtimer_force_reprogram(new_base->cpu_base, 1);
+	return 0;
 }
 
 /**
@@ -1166,7 +1241,7 @@ int hrtimer_try_to_cancel(struct hrtimer *timer)
 	base = lock_hrtimer_base(timer, &flags);
 
 	if (!hrtimer_callback_running(timer))
-		ret = remove_hrtimer(timer, base, false);
+		ret = remove_hrtimer(timer, base, false, false);
 
 	unlock_hrtimer_base(timer, &flags);
 
@@ -1445,8 +1520,8 @@ bool hrtimer_active(const struct hrtimer *timer)
 		base = READ_ONCE(timer->base);
 		seq = raw_read_seqcount_begin(&base->seq);
 
-		if (timer->state != HRTIMER_STATE_INACTIVE ||
-		    base->running == timer)
+		if (((timer->state & ~HRTIMER_STATE_PINNED) !=
+		      HRTIMER_STATE_INACTIVE) || base->running == timer)
 			return true;
 
 	} while (read_seqcount_retry(&base->seq, seq) ||
@@ -1514,7 +1589,13 @@ static void __run_hrtimer(struct hrtimer_cpu_base *cpu_base,
 	 */
 	raw_spin_unlock_irqrestore(&cpu_base->lock, flags);
 	trace_hrtimer_expire_entry(timer, now);
+#if IS_ENABLED(CONFIG_SEC_DEBUG_MSG_LOG)
+	sec_debug_msg_log("hrtimer %pS entry", fn);
+#endif
 	restart = fn(timer);
+#if IS_ENABLED(CONFIG_SEC_DEBUG_MSG_LOG)
+	sec_debug_msg_log("hrtimer %pS exit", fn);
+#endif
 	trace_hrtimer_expire_exit(timer);
 	raw_spin_lock_irq(&cpu_base->lock);
 
@@ -1640,8 +1721,8 @@ retry:
 
 	__hrtimer_run_queues(cpu_base, now, flags, HRTIMER_ACTIVE_HARD);
 
-	/* Reevaluate the clock bases for the next expiry */
-	expires_next = __hrtimer_get_next_event(cpu_base, HRTIMER_ACTIVE_ALL);
+	/* Reevaluate the clock bases for the [soft] next expiry */
+	expires_next = hrtimer_update_next_event(cpu_base);
 	/*
 	 * Store the new expiry value so the migration code can verify
 	 * against it.
@@ -1935,9 +2016,9 @@ long hrtimer_nanosleep(const struct timespec64 *rqtp,
 	}
 
 	restart = &current->restart_block;
-	restart->fn = hrtimer_nanosleep_restart;
 	restart->nanosleep.clockid = t.timer.base->clockid;
 	restart->nanosleep.expires = hrtimer_get_expires_tv64(&t.timer);
+	set_restart_fn(restart, hrtimer_nanosleep_restart);
 out:
 	destroy_hrtimer_on_stack(&t.timer);
 	return ret;
@@ -2008,16 +2089,22 @@ int hrtimers_prepare_cpu(unsigned int cpu)
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
-
 static void migrate_hrtimer_list(struct hrtimer_clock_base *old_base,
-				struct hrtimer_clock_base *new_base)
+				 struct hrtimer_clock_base *new_base,
+				 bool remove_pinned)
 {
 	struct hrtimer *timer;
 	struct timerqueue_node *node;
+	struct timerqueue_head pinned;
+	int is_pinned;
+	bool is_hotplug = !cpu_online(old_base->cpu_base->cpu);
+
+	timerqueue_init_head(&pinned);
 
 	while ((node = timerqueue_getnext(&old_base->active))) {
 		timer = container_of(node, struct hrtimer, node);
-		BUG_ON(hrtimer_callback_running(timer));
+		if (is_hotplug)
+			BUG_ON(hrtimer_callback_running(timer));
 		debug_deactivate(timer);
 
 		/*
@@ -2026,6 +2113,13 @@ static void migrate_hrtimer_list(struct hrtimer_clock_base *old_base,
 		 * under us on another CPU
 		 */
 		__remove_hrtimer(timer, old_base, HRTIMER_STATE_ENQUEUED, 0);
+
+		is_pinned = timer->state & HRTIMER_STATE_PINNED;
+		if (!remove_pinned && is_pinned) {
+			timerqueue_add(&pinned, &timer->node);
+			continue;
+		}
+
 		timer->base = new_base;
 		/*
 		 * Enqueue the timers on the new cpu. This does not
@@ -2037,23 +2131,23 @@ static void migrate_hrtimer_list(struct hrtimer_clock_base *old_base,
 		 */
 		enqueue_hrtimer(timer, new_base, HRTIMER_MODE_ABS);
 	}
+
+	/* Re-queue pinned timers for non-hotplug usecase */
+	while ((node = timerqueue_getnext(&pinned))) {
+		timer = container_of(node, struct hrtimer, node);
+
+		timerqueue_del(&pinned, &timer->node);
+		enqueue_hrtimer(timer, old_base, HRTIMER_MODE_ABS);
+	}
 }
 
-int hrtimers_dead_cpu(unsigned int scpu)
+static void __migrate_hrtimers(unsigned int scpu, bool remove_pinned)
 {
 	struct hrtimer_cpu_base *old_base, *new_base;
+	unsigned long flags;
 	int i;
 
-	BUG_ON(cpu_online(scpu));
-	tick_cancel_sched_timer(scpu);
-
-	/*
-	 * this BH disable ensures that raise_softirq_irqoff() does
-	 * not wakeup ksoftirqd (and acquire the pi-lock) while
-	 * holding the cpu_base lock
-	 */
-	local_bh_disable();
-	local_irq_disable();
+	local_irq_save(flags);
 	old_base = &per_cpu(hrtimer_bases, scpu);
 	new_base = this_cpu_ptr(&hrtimer_bases);
 	/*
@@ -2065,7 +2159,7 @@ int hrtimers_dead_cpu(unsigned int scpu)
 
 	for (i = 0; i < HRTIMER_MAX_CLOCK_BASES; i++) {
 		migrate_hrtimer_list(&old_base->clock_base[i],
-				     &new_base->clock_base[i]);
+				     &new_base->clock_base[i], remove_pinned);
 	}
 
 	/*
@@ -2079,9 +2173,28 @@ int hrtimers_dead_cpu(unsigned int scpu)
 
 	/* Check, if we got expired work to do */
 	__hrtimer_peek_ahead_timers();
-	local_irq_enable();
+	local_irq_restore(flags);
+}
+
+int hrtimers_dead_cpu(unsigned int scpu)
+{
+	BUG_ON(cpu_online(scpu));
+	tick_cancel_sched_timer(scpu);
+
+	/*
+	 * this BH disable ensures that raise_softirq_irqoff() does
+	 * not wakeup ksoftirqd (and acquire the pi-lock) while
+	 * holding the cpu_base lock
+	 */
+	local_bh_disable();
+	__migrate_hrtimers(scpu, true);
 	local_bh_enable();
 	return 0;
+}
+
+void hrtimer_quiesce_cpu(void *cpup)
+{
+	__migrate_hrtimers(*(int *)cpup, false);
 }
 
 #endif /* CONFIG_HOTPLUG_CPU */

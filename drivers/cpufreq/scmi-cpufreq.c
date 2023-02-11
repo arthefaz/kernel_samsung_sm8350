@@ -29,7 +29,7 @@ static const struct scmi_handle *handle;
 static unsigned int scmi_cpufreq_get_rate(unsigned int cpu)
 {
 	struct cpufreq_policy *policy = cpufreq_cpu_get_raw(cpu);
-	const struct scmi_perf_ops *perf_ops = handle->perf_ops;
+	struct scmi_perf_ops *perf_ops = handle->perf_ops;
 	struct scmi_data *priv = policy->driver_data;
 	unsigned long rate;
 	int ret;
@@ -50,7 +50,7 @@ scmi_cpufreq_set_target(struct cpufreq_policy *policy, unsigned int index)
 {
 	int ret;
 	struct scmi_data *priv = policy->driver_data;
-	const struct scmi_perf_ops *perf_ops = handle->perf_ops;
+	struct scmi_perf_ops *perf_ops = handle->perf_ops;
 	u64 freq = policy->freq_table[index].frequency;
 
 	ret = perf_ops->freq_set(handle, priv->domain_id, freq * 1000, false);
@@ -64,7 +64,7 @@ static unsigned int scmi_cpufreq_fast_switch(struct cpufreq_policy *policy,
 					     unsigned int target_freq)
 {
 	struct scmi_data *priv = policy->driver_data;
-	const struct scmi_perf_ops *perf_ops = handle->perf_ops;
+	struct scmi_perf_ops *perf_ops = handle->perf_ops;
 
 	if (!perf_ops->freq_set(handle, priv->domain_id,
 				target_freq * 1000, true)) {
@@ -198,8 +198,7 @@ static int scmi_cpufreq_init(struct cpufreq_policy *policy)
 
 	policy->cpuinfo.transition_latency = latency;
 
-	policy->fast_switch_possible =
-		handle->perf_ops->fast_switch_possible(handle, cpu_dev);
+	policy->fast_switch_possible = true;
 
 	em_register_perf_domain(policy->cpus, nr_opp, &em_cb);
 
@@ -262,7 +261,7 @@ static void scmi_cpufreq_remove(struct scmi_device *sdev)
 }
 
 static const struct scmi_device_id scmi_id_table[] = {
-	{ SCMI_PROTOCOL_PERF, "cpufreq" },
+	{ SCMI_PROTOCOL_PERF },
 	{ },
 };
 MODULE_DEVICE_TABLE(scmi, scmi_id_table);

@@ -4,13 +4,7 @@
  *
  * Copyright (C) 2018 ARM Ltd.
  */
-
-#ifndef _LINUX_SCMI_PROTOCOL_H
-#define _LINUX_SCMI_PROTOCOL_H
-
-#include <linux/bitfield.h>
 #include <linux/device.h>
-#include <linux/notifier.h>
 #include <linux/types.h>
 
 #define SCMI_MAX_STR_SIZE	16
@@ -120,8 +114,6 @@ struct scmi_perf_ops {
 			unsigned long *rate, bool poll);
 	int (*est_power_get)(const struct scmi_handle *handle, u32 domain,
 			     unsigned long *rate, unsigned long *power);
-	bool (*fast_switch_possible)(const struct scmi_handle *handle,
-				     struct device *dev);
 };
 
 /**
@@ -149,283 +141,26 @@ struct scmi_power_ops {
 			 u32 *state);
 };
 
-/**
- * scmi_sensor_reading  - represent a timestamped read
- *
- * Used by @reading_get_timestamped method.
- *
- * @value: The signed value sensor read.
- * @timestamp: An unsigned timestamp for the sensor read, as provided by
- *	       SCMI platform. Set to zero when not available.
- */
-struct scmi_sensor_reading {
-	long long value;
-	unsigned long long timestamp;
-};
-
-/**
- * scmi_range_attrs  - specifies a sensor or axis values' range
- * @min_range: The minimum value which can be represented by the sensor/axis.
- * @max_range: The maximum value which can be represented by the sensor/axis.
- */
-struct scmi_range_attrs {
-	long long min_range;
-	long long max_range;
-};
-
-/**
- * scmi_sensor_axis_info  - describes one sensor axes
- * @id: The axes ID.
- * @type: Axes type. Chosen amongst one of @enum scmi_sensor_class.
- * @scale: Power-of-10 multiplier applied to the axis unit.
- * @name: NULL-terminated string representing axes name as advertised by
- *	  SCMI platform.
- * @extended_attrs: Flag to indicate the presence of additional extended
- *		    attributes for this axes.
- * @resolution: Extended attribute representing the resolution of the axes.
- *		Set to 0 if not reported by this axes.
- * @exponent: Extended attribute representing the power-of-10 multiplier that
- *	      is applied to the resolution field. Set to 0 if not reported by
- *	      this axes.
- * @attrs: Extended attributes representing minimum and maximum values
- *	   measurable by this axes. Set to 0 if not reported by this sensor.
- */
-struct scmi_sensor_axis_info {
-	unsigned int id;
-	unsigned int type;
-	int scale;
-	char name[SCMI_MAX_STR_SIZE];
-	bool extended_attrs;
-	unsigned int resolution;
-	int exponent;
-	struct scmi_range_attrs attrs;
-};
-
-/**
- * scmi_sensor_intervals_info  - describes number and type of available update
- * intervals
- * @segmented: Flag for segmented intervals' representation. When True there
- *	       will be exactly 3 intervals in @desc, with each entry
- *	       representing a member of a segment in this order:
- *	       {lowest update interval, highest update interval, step size}
- * @count: Number of intervals described in @desc.
- * @desc: Array of @count interval descriptor bitmask represented as detailed in
- *	  the SCMI specification: it can be accessed using the accompanying
- *	  macros.
- * @prealloc_pool: A minimal preallocated pool of desc entries used to avoid
- *		   lesser-than-64-bytes dynamic allocation for small @count
- *		   values.
- */
-struct scmi_sensor_intervals_info {
-	bool segmented;
-	unsigned int count;
-#define SCMI_SENS_INTVL_SEGMENT_LOW	0
-#define SCMI_SENS_INTVL_SEGMENT_HIGH	1
-#define SCMI_SENS_INTVL_SEGMENT_STEP	2
-	unsigned int *desc;
-#define SCMI_SENS_INTVL_GET_SECS(x)		FIELD_GET(GENMASK(20, 5), (x))
-#define SCMI_SENS_INTVL_GET_EXP(x)					\
-	({								\
-		int __signed_exp = FIELD_GET(GENMASK(4, 0), (x));	\
-									\
-		if (__signed_exp & BIT(4))				\
-			__signed_exp |= GENMASK(31, 5);			\
-		__signed_exp;						\
-	})
-#define SCMI_MAX_PREALLOC_POOL			16
-	unsigned int prealloc_pool[SCMI_MAX_PREALLOC_POOL];
-};
-
-/**
- * struct scmi_sensor_info - represents information related to one of the
- * available sensors.
- * @id: Sensor ID.
- * @type: Sensor type. Chosen amongst one of @enum scmi_sensor_class.
- * @scale: Power-of-10 multiplier applied to the sensor unit.
- * @num_trip_points: Number of maximum configurable trip points.
- * @async: Flag for asynchronous read support.
- * @update: Flag for continuouos update notification support.
- * @timestamped: Flag for timestamped read support.
- * @tstamp_scale: Power-of-10 multiplier applied to the sensor timestamps to
- *		  represent it in seconds.
- * @num_axis: Number of supported axis if any. Reported as 0 for scalar sensors.
- * @axis: Pointer to an array of @num_axis descriptors.
- * @intervals: Descriptor of available update intervals.
- * @sensor_config: A bitmask reporting the current sensor configuration as
- *		   detailed in the SCMI specification: it can accessed and
- *		   modified through the accompanying macros.
- * @name: NULL-terminated string representing sensor name as advertised by
- *	  SCMI platform.
- * @extended_scalar_attrs: Flag to indicate the presence of additional extended
- *			   attributes for this sensor.
- * @sensor_power: Extended attribute representing the average power
- *		  consumed by the sensor in microwatts (uW) when it is active.
- *		  Reported here only for scalar sensors.
- *		  Set to 0 if not reported by this sensor.
- * @resolution: Extended attribute representing the resolution of the sensor.
- *		Reported here only for scalar sensors.
- *		Set to 0 if not reported by this sensor.
- * @exponent: Extended attribute representing the power-of-10 multiplier that is
- *	      applied to the resolution field.
- *	      Reported here only for scalar sensors.
- *	      Set to 0 if not reported by this sensor.
- * @scalar_attrs: Extended attributes representing minimum and maximum
- *		  measurable values by this sensor.
- *		  Reported here only for scalar sensors.
- *		  Set to 0 if not reported by this sensor.
- */
 struct scmi_sensor_info {
-	unsigned int id;
-	unsigned int type;
-	int scale;
-	unsigned int num_trip_points;
+	u32 id;
+	u8 type;
+	s8 scale;
+	u8 num_trip_points;
 	bool async;
-	bool update;
-	bool timestamped;
-	int tstamp_scale;
-	unsigned int num_axis;
-	struct scmi_sensor_axis_info *axis;
-	struct scmi_sensor_intervals_info intervals;
-	unsigned int sensor_config;
-#define SCMI_SENS_CFG_UPDATE_SECS_MASK		GENMASK(31, 16)
-#define SCMI_SENS_CFG_GET_UPDATE_SECS(x)				\
-	FIELD_GET(SCMI_SENS_CFG_UPDATE_SECS_MASK, (x))
-
-#define SCMI_SENS_CFG_UPDATE_EXP_MASK		GENMASK(15, 11)
-#define SCMI_SENS_CFG_GET_UPDATE_EXP(x)					\
-	({								\
-		int __signed_exp =					\
-			FIELD_GET(SCMI_SENS_CFG_UPDATE_EXP_MASK, (x));	\
-									\
-		if (__signed_exp & BIT(4))				\
-			__signed_exp |= GENMASK(31, 5);			\
-		__signed_exp;						\
-	})
-
-#define SCMI_SENS_CFG_ROUND_MASK		GENMASK(10, 9)
-#define SCMI_SENS_CFG_ROUND_AUTO		2
-#define SCMI_SENS_CFG_ROUND_UP			1
-#define SCMI_SENS_CFG_ROUND_DOWN		0
-
-#define SCMI_SENS_CFG_TSTAMP_ENABLED_MASK	BIT(1)
-#define SCMI_SENS_CFG_TSTAMP_ENABLE		1
-#define SCMI_SENS_CFG_TSTAMP_DISABLE		0
-#define SCMI_SENS_CFG_IS_TSTAMP_ENABLED(x)				\
-	FIELD_GET(SCMI_SENS_CFG_TSTAMP_ENABLED_MASK, (x))
-
-#define SCMI_SENS_CFG_SENSOR_ENABLED_MASK	BIT(0)
-#define SCMI_SENS_CFG_SENSOR_ENABLE		1
-#define SCMI_SENS_CFG_SENSOR_DISABLE		0
 	char name[SCMI_MAX_STR_SIZE];
-#define SCMI_SENS_CFG_IS_ENABLED(x)		FIELD_GET(BIT(0), (x))
-	bool extended_scalar_attrs;
-	unsigned int sensor_power;
-	unsigned int resolution;
-	int exponent;
-	struct scmi_range_attrs scalar_attrs;
 };
 
 /*
  * Partial list from Distributed Management Task Force (DMTF) specification:
- * DSP0248 (Platform Level Data Model for Platform Monitoring and Control
- * specification)
+ * DSP0249 (Platform Level Data Model specification)
  */
 enum scmi_sensor_class {
 	NONE = 0x0,
-	UNSPEC = 0x1,
 	TEMPERATURE_C = 0x2,
-	TEMPERATURE_F = 0x3,
-	TEMPERATURE_K = 0x4,
 	VOLTAGE = 0x5,
 	CURRENT = 0x6,
 	POWER = 0x7,
 	ENERGY = 0x8,
-	CHARGE = 0x9,
-	VOLTAMPERE = 0xA,
-	NITS = 0xB,
-	LUMENS = 0xC,
-	LUX = 0xD,
-	CANDELAS = 0xE,
-	KPA = 0xF,
-	PSI = 0x10,
-	NEWTON = 0x11,
-	CFM = 0x12,
-	RPM = 0x13,
-	HERTZ = 0x14,
-	SECS = 0x15,
-	MINS = 0x16,
-	HOURS = 0x17,
-	DAYS = 0x18,
-	WEEKS = 0x19,
-	MILS = 0x1A,
-	INCHES = 0x1B,
-	FEET = 0x1C,
-	CUBIC_INCHES = 0x1D,
-	CUBIC_FEET = 0x1E,
-	METERS = 0x1F,
-	CUBIC_CM = 0x20,
-	CUBIC_METERS = 0x21,
-	LITERS = 0x22,
-	FLUID_OUNCES = 0x23,
-	RADIANS = 0x24,
-	STERADIANS = 0x25,
-	REVOLUTIONS = 0x26,
-	CYCLES = 0x27,
-	GRAVITIES = 0x28,
-	OUNCES = 0x29,
-	POUNDS = 0x2A,
-	FOOT_POUNDS = 0x2B,
-	OUNCE_INCHES = 0x2C,
-	GAUSS = 0x2D,
-	GILBERTS = 0x2E,
-	HENRIES = 0x2F,
-	FARADS = 0x30,
-	OHMS = 0x31,
-	SIEMENS = 0x32,
-	MOLES = 0x33,
-	BECQUERELS = 0x34,
-	PPM = 0x35,
-	DECIBELS = 0x36,
-	DBA = 0x37,
-	DBC = 0x38,
-	GRAYS = 0x39,
-	SIEVERTS = 0x3A,
-	COLOR_TEMP_K = 0x3B,
-	BITS = 0x3C,
-	BYTES = 0x3D,
-	WORDS = 0x3E,
-	DWORDS = 0x3F,
-	QWORDS = 0x40,
-	PERCENTAGE = 0x41,
-	PASCALS = 0x42,
-	COUNTS = 0x43,
-	GRAMS = 0x44,
-	NEWTON_METERS = 0x45,
-	HITS = 0x46,
-	MISSES = 0x47,
-	RETRIES = 0x48,
-	OVERRUNS = 0x49,
-	UNDERRUNS = 0x4A,
-	COLLISIONS = 0x4B,
-	PACKETS = 0x4C,
-	MESSAGES = 0x4D,
-	CHARS = 0x4E,
-	ERRORS = 0x4F,
-	CORRECTED_ERRS = 0x50,
-	UNCORRECTABLE_ERRS = 0x51,
-	SQ_MILS = 0x52,
-	SQ_INCHES = 0x53,
-	SQ_FEET = 0x54,
-	SQ_CM = 0x55,
-	SQ_METERS = 0x56,
-	RADIANS_SEC = 0x57,
-	BPM = 0x58,
-	METERS_SEC_SQUARED = 0x59,
-	METERS_SEC = 0x5A,
-	CUBIC_METERS_SEC = 0x5B,
-	MM_MERCURY = 0x5C,
-	RADIANS_SEC_SQUARED = 0x5D,
-	OEM_UNIT = 0xFF
 };
 
 /**
@@ -434,31 +169,22 @@ enum scmi_sensor_class {
  *
  * @count_get: get the count of sensors provided by SCMI
  * @info_get: get the information of the specified sensor
+ * @trip_point_notify: control notifications on cross-over events for
+ *	the trip-points
  * @trip_point_config: selects and configures a trip-point of interest
  * @reading_get: gets the current value of the sensor
- * @reading_get_timestamped: gets the current value and timestamp, when
- *			     available, of the sensor. (as of v3.0 spec)
- *			     Supports multi-axis sensors for sensors which
- *			     supports it and if the @reading array size of
- *			     @count entry equals the sensor num_axis
- * @config_get: Get sensor current configuration
- * @config_set: Set sensor current configuration
  */
 struct scmi_sensor_ops {
 	int (*count_get)(const struct scmi_handle *handle);
+
 	const struct scmi_sensor_info *(*info_get)
 		(const struct scmi_handle *handle, u32 sensor_id);
+	int (*trip_point_notify)(const struct scmi_handle *handle,
+				 u32 sensor_id, bool enable);
 	int (*trip_point_config)(const struct scmi_handle *handle,
 				 u32 sensor_id, u8 trip_id, u64 trip_value);
 	int (*reading_get)(const struct scmi_handle *handle, u32 sensor_id,
 			   u64 *value);
-	int (*reading_get_timestamped)(const struct scmi_handle *handle,
-				       u32 sensor_id, u8 count,
-				       struct scmi_sensor_reading *readings);
-	int (*config_get)(const struct scmi_handle *handle,
-			  u32 sensor_id, u32 *sensor_config);
-	int (*config_set)(const struct scmi_handle *handle,
-			  u32 sensor_id, u32 sensor_config);
 };
 
 /**
@@ -481,48 +207,84 @@ struct scmi_reset_ops {
 	int (*deassert)(const struct scmi_handle *handle, u32 domain);
 };
 
+#ifdef CONFIG_QTI_SCMI_MEMLAT_PROTOCOL
 /**
- * struct scmi_notify_ops  - represents notifications' operations provided by
- * SCMI core
- * @register_event_notifier: Register a notifier_block for the requested event
- * @unregister_event_notifier: Unregister a notifier_block for the requested
- *			       event
+ * struct scmi_memlat_vendor_ops - represents the various operations provided
+ *	by SCMI HW Memlat Protocol
  *
- * A user can register/unregister its own notifier_block against the wanted
- * platform instance regarding the desired event identified by the
- * tuple: (proto_id, evt_id, src_id) using the provided register/unregister
- * interface where:
- *
- * @handle: The handle identifying the platform instance to use
- * @proto_id: The protocol ID as in SCMI Specification
- * @evt_id: The message ID of the desired event as in SCMI Specification
- * @src_id: A pointer to the desired source ID if different sources are
- *	    possible for the protocol (like domain_id, sensor_id...etc)
- *
- * @src_id can be provided as NULL if it simply does NOT make sense for
- * the protocol at hand, OR if the user is explicitly interested in
- * receiving notifications from ANY existent source associated to the
- * specified proto_id / evt_id.
- *
- * Received notifications are finally delivered to the registered users,
- * invoking the callback provided with the notifier_block *nb as follows:
- *
- *	int user_cb(nb, evt_id, report)
- *
- * with:
- *
- * @nb: The notifier block provided by the user
- * @evt_id: The message ID of the delivered event
- * @report: A custom struct describing the specific event delivered
+ * @cpu_grp: set the cpugrp
+ * @set_mon: set the supported monitors
+ * @common_pmu_map: sets the common PMU map supported by gov
+ * @mon_pmu_map: sets the common PMU map supported by gov
+ * @ratio_ceil: sets the ratio_ceil needed for hw memlat governor
+ * @stall_floor: sets the stall_floor needed for hw memlat governor
+ * @l2wb_pct: sets the stall_floor needed for hw memlat governor
+ * @l2wb_filter: sets the l2wb_filter needed for hw memlat governor
+ * @sample_ms: sets the sample_ms at this interval governor will poll
+ * @freq_map: sets the freq_map of the monitor
+ * @min_freq: sets the min_freq of monitor
+ * @max_freq: sets the max_freq of monitor
+ * @start_mon: starts monitor in rimps
+ * @stop_mon: stops monitor in rimps
+ * @log_level: configure the supported log_level in rimps
+ * @get_data: added for debug purpose gets the data structure information
  */
-struct scmi_notify_ops {
-	int (*register_event_notifier)(const struct scmi_handle *handle,
-				       u8 proto_id, u8 evt_id, u32 *src_id,
-				       struct notifier_block *nb);
-	int (*unregister_event_notifier)(const struct scmi_handle *handle,
-					 u8 proto_id, u8 evt_id, u32 *src_id,
-					 struct notifier_block *nb);
+struct scmi_memlat_vendor_ops {
+	int (*set_cpu_grp)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type);
+	int (*set_mon)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type);
+	int (*common_pmu_map)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type,
+				u32 nr_rows, void *buf);
+	int (*mon_pmu_map)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type,
+				u32 nr_rows, void *buf);
+	int (*ratio_ceil)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type, u32 val);
+	int (*stall_floor)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type, u32 val);
+	int (*l2wb_pct)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type, u32 val);
+	int (*l2wb_filter)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type, u32 val);
+	int (*sample_ms)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type, u32 val);
+	int (*freq_map)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type,
+				u32 nr_rows, void *buf);
+	int (*min_freq)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type, u32 val);
+	int (*max_freq)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type, u32 val);
+	int (*start_monitor)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type);
+	int (*stop_monitor)(const struct scmi_handle *handle,
+				u32 cpus_mpidr, u32 mon_type);
+	int (*set_log_level)(const struct scmi_handle *handle, u32 val);
+	int (*get_data)(const struct scmi_handle *handle, u8 *buf);
 };
+#endif
+
+#ifdef CONFIG_QTI_SCMI_PLH_PROTOCOL
+/**
+ * struct scmi_plh_vendor_ops - represents the various operations provided
+ *	by SCMI PLH Protocol
+ *
+ * @init_splh_ipc_freq_tbl: initialize scroll plh ipc freq voting table in rimps
+ * @start_splh: starts scroll plh in rimps
+ * @stop_splh: stops scroll plh in rimps
+ * @set_plh_log_level: configure the supported log_level in plh module of rimps
+ */
+struct scmi_plh_vendor_ops {
+	int (*init_splh_ipc_freq_tbl)(const struct scmi_handle *handle,
+				u16 *p_init_args, u16 init_len);
+	int (*start_splh)(const struct scmi_handle *handle,	u16 fps);
+	int (*stop_splh)(const struct scmi_handle *handle);
+	int (*set_plh_log_level)(const struct scmi_handle *handle,
+				u16 log_level);
+};
+#endif
 
 /**
  * struct scmi_handle - Handle returned to ARM SCMI clients for usage.
@@ -534,7 +296,6 @@ struct scmi_notify_ops {
  * @clk_ops: pointer to set of clock protocol operations
  * @sensor_ops: pointer to set of sensor protocol operations
  * @reset_ops: pointer to set of reset protocol operations
- * @notify_ops: pointer to set of notifications related operations
  * @perf_priv: pointer to private data structure specific to performance
  *	protocol(for internal use only)
  * @clk_priv: pointer to private data structure specific to clock
@@ -545,26 +306,27 @@ struct scmi_notify_ops {
  *	protocol(for internal use only)
  * @reset_priv: pointer to private data structure specific to reset
  *	protocol(for internal use only)
- * @notify_priv: pointer to private data structure specific to notifications
- *	(for internal use only)
  */
 struct scmi_handle {
 	struct device *dev;
 	struct scmi_revision_info *version;
-	const struct scmi_perf_ops *perf_ops;
-	const struct scmi_clk_ops *clk_ops;
-	const struct scmi_power_ops *power_ops;
-	const struct scmi_sensor_ops *sensor_ops;
-	const struct scmi_reset_ops *reset_ops;
-	const struct scmi_notify_ops *notify_ops;
+	struct scmi_perf_ops *perf_ops;
+	struct scmi_clk_ops *clk_ops;
+	struct scmi_power_ops *power_ops;
+	struct scmi_sensor_ops *sensor_ops;
+	struct scmi_reset_ops *reset_ops;
+#ifdef CONFIG_QTI_SCMI_MEMLAT_PROTOCOL
+	struct scmi_memlat_vendor_ops *memlat_ops;
+#endif
+#ifdef CONFIG_QTI_SCMI_PLH_PROTOCOL
+	struct scmi_plh_vendor_ops *plh_ops;
+#endif
 	/* for protocol internal use */
 	void *perf_priv;
 	void *clk_priv;
 	void *power_priv;
 	void *sensor_priv;
 	void *reset_priv;
-	void *notify_priv;
-	void *system_priv;
 };
 
 enum scmi_std_protocol {
@@ -575,21 +337,17 @@ enum scmi_std_protocol {
 	SCMI_PROTOCOL_CLOCK = 0x14,
 	SCMI_PROTOCOL_SENSOR = 0x15,
 	SCMI_PROTOCOL_RESET = 0x16,
-};
-
-enum scmi_system_events {
-	SCMI_SYSTEM_SHUTDOWN,
-	SCMI_SYSTEM_COLDRESET,
-	SCMI_SYSTEM_WARMRESET,
-	SCMI_SYSTEM_POWERUP,
-	SCMI_SYSTEM_SUSPEND,
-	SCMI_SYSTEM_MAX
+#ifdef CONFIG_QTI_SCMI_MEMLAT_PROTOCOL
+	SCMI_PROTOCOL_MEMLAT = 0x80,
+#endif
+#ifdef CONFIG_QTI_SCMI_PLH_PROTOCOL
+	SCMI_PROTOCOL_PLH = 0x81,
+#endif
 };
 
 struct scmi_device {
 	u32 id;
 	u8 protocol_id;
-	const char *name;
 	struct device dev;
 	struct scmi_handle *handle;
 };
@@ -597,13 +355,11 @@ struct scmi_device {
 #define to_scmi_dev(d) container_of(d, struct scmi_device, dev)
 
 struct scmi_device *
-scmi_device_create(struct device_node *np, struct device *parent, int protocol,
-		   const char *name);
+scmi_device_create(struct device_node *np, struct device *parent, int protocol);
 void scmi_device_destroy(struct scmi_device *scmi_dev);
 
 struct scmi_device_id {
 	u8 protocol_id;
-	const char *name;
 };
 
 struct scmi_driver {
@@ -617,7 +373,7 @@ struct scmi_driver {
 
 #define to_scmi_driver(d) container_of(d, struct scmi_driver, driver)
 
-#if IS_REACHABLE(CONFIG_ARM_SCMI_PROTOCOL)
+#ifdef CONFIG_ARM_SCMI_PROTOCOL
 int scmi_driver_register(struct scmi_driver *driver,
 			 struct module *owner, const char *mod_name);
 void scmi_driver_unregister(struct scmi_driver *driver);
@@ -651,76 +407,3 @@ static inline void scmi_driver_unregister(struct scmi_driver *driver) {}
 typedef int (*scmi_prot_init_fn_t)(struct scmi_handle *);
 int scmi_protocol_register(int protocol_id, scmi_prot_init_fn_t fn);
 void scmi_protocol_unregister(int protocol_id);
-
-/* SCMI Notification API - Custom Event Reports */
-enum scmi_notification_events {
-	SCMI_EVENT_POWER_STATE_CHANGED = 0x0,
-	SCMI_EVENT_PERFORMANCE_LIMITS_CHANGED = 0x0,
-	SCMI_EVENT_PERFORMANCE_LEVEL_CHANGED = 0x1,
-	SCMI_EVENT_SENSOR_TRIP_POINT_EVENT = 0x0,
-	SCMI_EVENT_SENSOR_UPDATE = 0x1,
-	SCMI_EVENT_RESET_ISSUED = 0x0,
-	SCMI_EVENT_BASE_ERROR_EVENT = 0x0,
-	SCMI_EVENT_SYSTEM_POWER_STATE_NOTIFIER = 0x0,
-};
-
-struct scmi_power_state_changed_report {
-	ktime_t		timestamp;
-	unsigned int	agent_id;
-	unsigned int	domain_id;
-	unsigned int	power_state;
-};
-
-struct scmi_system_power_state_notifier_report {
-	ktime_t		timestamp;
-	unsigned int	agent_id;
-	unsigned int	flags;
-	unsigned int	system_state;
-};
-
-struct scmi_perf_limits_report {
-	ktime_t		timestamp;
-	unsigned int	agent_id;
-	unsigned int	domain_id;
-	unsigned int	range_max;
-	unsigned int	range_min;
-};
-
-struct scmi_perf_level_report {
-	ktime_t		timestamp;
-	unsigned int	agent_id;
-	unsigned int	domain_id;
-	unsigned int	performance_level;
-};
-
-struct scmi_sensor_trip_point_report {
-	ktime_t		timestamp;
-	unsigned int	agent_id;
-	unsigned int	sensor_id;
-	unsigned int	trip_point_desc;
-};
-
-struct scmi_sensor_update_report {
-	ktime_t				timestamp;
-	unsigned int			agent_id;
-	unsigned int			sensor_id;
-	unsigned int			readings_count;
-	struct scmi_sensor_reading	readings[];
-};
-
-struct scmi_reset_issued_report {
-	ktime_t		timestamp;
-	unsigned int	agent_id;
-	unsigned int	domain_id;
-	unsigned int	reset_state;
-};
-
-struct scmi_base_error_report {
-	ktime_t			timestamp;
-	unsigned int		agent_id;
-	bool			fatal;
-	unsigned int		cmd_count;
-	unsigned long long	reports[];
-};
-
-#endif /* _LINUX_SCMI_PROTOCOL_H */

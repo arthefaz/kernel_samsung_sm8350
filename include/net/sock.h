@@ -71,6 +71,13 @@
 #include <linux/android_kabi.h>
 #include <linux/android_vendor.h>
 
+// SEC_PRODUCT_FEATURE_KNOX_SUPPORT_NPA {
+#ifdef CONFIG_KNOX_NCM
+#define NAP_PROCESS_NAME_LEN	128
+#define NAP_DOMAIN_NAME_LEN		255
+#endif
+// SEC_PRODUCT_FEATURE_KNOX_SUPPORT_NPA }
+
 /*
  * This structure really needs to be cleaned up.
  * Most of it is for TCP, and not used by any of
@@ -234,6 +241,25 @@ struct sock_common {
 };
 
 struct bpf_sk_storage;
+
+// SEC_PRODUCT_FEATURE_KNOX_SUPPORT_NPA {
+#ifdef CONFIG_KNOX_NCM
+struct sock_npa_vendor_data {
+	uid_t	knox_uid;
+	pid_t	knox_pid;
+	uid_t	knox_dns_uid;
+	char 	domain_name[NAP_DOMAIN_NAME_LEN];
+	char	process_name[NAP_PROCESS_NAME_LEN];
+	uid_t	knox_puid;
+	pid_t	knox_ppid;
+	char	parent_process_name[NAP_PROCESS_NAME_LEN];
+	pid_t	knox_dns_pid;
+	char 	dns_process_name[NAP_PROCESS_NAME_LEN];
+};
+
+#define SOCK_NPA_VENDOR_DATA_GET(sock) ((struct sock_npa_vendor_data*)((sock)->android_vendor_data1))
+#endif
+// SEC_PRODUCT_FEATURE_KNOX_SUPPORT_NPA }
 
 /**
   *	struct sock - network layer representation of sockets
@@ -1873,7 +1899,8 @@ static inline u32 net_tx_rndhash(void)
 
 static inline void sk_set_txhash(struct sock *sk)
 {
-	sk->sk_txhash = net_tx_rndhash();
+	/* This pairs with READ_ONCE() in skb_set_hash_from_sk() */
+	WRITE_ONCE(sk->sk_txhash, net_tx_rndhash());
 }
 
 static inline void sk_rethink_txhash(struct sock *sk)
@@ -2138,9 +2165,12 @@ static inline void sock_poll_wait(struct file *filp, struct socket *sock,
 
 static inline void skb_set_hash_from_sk(struct sk_buff *skb, struct sock *sk)
 {
-	if (sk->sk_txhash) {
+	/* This pairs with WRITE_ONCE() in sk_set_txhash() */
+	u32 txhash = READ_ONCE(sk->sk_txhash);
+
+	if (txhash) {
 		skb->l4_hash = 1;
-		skb->hash = sk->sk_txhash;
+		skb->hash = txhash;
 	}
 }
 
@@ -2161,6 +2191,17 @@ static inline void skb_set_owner_r(struct sk_buff *skb, struct sock *sk)
 	skb->destructor = sock_rfree;
 	atomic_add(skb->truesize, &sk->sk_rmem_alloc);
 	sk_mem_charge(sk, skb->truesize);
+}
+
+static inline __must_check bool skb_set_owner_sk_safe(struct sk_buff *skb, struct sock *sk)
+{
+	if (sk && refcount_inc_not_zero(&sk->sk_refcnt)) {
+		skb_orphan(skb);
+		skb->destructor = sock_efree;
+		skb->sk = sk;
+		return true;
+	}
+	return false;
 }
 
 void sk_reset_timer(struct sock *sk, struct timer_list *timer,

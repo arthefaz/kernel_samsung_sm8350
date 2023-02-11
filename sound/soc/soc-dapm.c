@@ -1709,6 +1709,14 @@ static void dapm_seq_run(struct snd_soc_card *card,
 			list_move(&w->power_list, &pending);
 			break;
 		}
+#ifdef CONFIG_AUDIO_QGKI
+		/*
+		 * Add this debug log to keep track of widgets being
+		 * powered-up and powered-down.
+		 */
+		dev_dbg(w->dapm->dev, "dapm: powering %s widget %s\n",
+			power_up ? "up" : "down", w->name);
+#endif
 
 		if (ret < 0)
 			dev_err(w->dapm->dev,
@@ -2484,6 +2492,7 @@ void snd_soc_dapm_free_widget(struct snd_soc_dapm_widget *w)
 	enum snd_soc_dapm_direction dir;
 
 	list_del(&w->list);
+	list_del(&w->dirty);
 	/*
 	 * remove source and sink paths associated to this widget.
 	 * While removing the path, remove reference to it from both
@@ -4423,7 +4432,11 @@ void snd_soc_dapm_connect_dai_link_widgets(struct snd_soc_card *card)
 		 * dynamic FE links have no fixed DAI mapping.
 		 * CODEC<->CODEC links have no direct connection.
 		 */
+#ifdef CONFIG_AUDIO_QGKI
+		if (rtd->dai_link->dynamic || rtd->dai_link->dynamic_be)
+#else
 		if (rtd->dai_link->dynamic)
+#endif
 			continue;
 
 		dapm_connect_dai_link_widgets(card, rtd);

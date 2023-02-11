@@ -139,6 +139,10 @@ scsi_set_blocked(struct scsi_cmnd *cmd, int reason)
 	switch (reason) {
 	case SCSI_MLQUEUE_HOST_BUSY:
 		atomic_set(&host->host_blocked, host->max_host_blocked);
+#if defined(CONFIG_SCSI_UFSHCD_QTI)
+		host->host_blocked_ts = ktime_get();
+		host->host_blocked_count++;
+#endif
 		break;
 	case SCSI_MLQUEUE_DEVICE_BUSY:
 	case SCSI_MLQUEUE_EH_RETRY:
@@ -762,6 +766,7 @@ static void scsi_io_completion_action(struct scsi_cmnd *cmd, int result)
 				case 0x07: /* operation in progress */
 				case 0x08: /* Long write in progress */
 				case 0x09: /* self test in progress */
+				case 0x11: /* notify (enable spinup) required */
 				case 0x14: /* space allocation in progress */
 				case 0x1a: /* start stop unit in progress */
 				case 0x1b: /* sanitize in progress */
@@ -1386,6 +1391,10 @@ static inline int scsi_host_queue_ready(struct request_queue *q,
 		return 0;
 
 	busy = atomic_inc_return(&shost->host_busy) - 1;
+#if defined(CONFIG_SCSI_UFSHCD_QTI)
+	shost->host_busy_ts = ktime_get();
+	shost->host_busy_count++;
+#endif
 	if (atomic_read(&shost->host_blocked) > 0) {
 		if (busy)
 			goto starved;
@@ -1701,6 +1710,13 @@ static blk_status_t scsi_queue_rq(struct blk_mq_hw_ctx *hctx,
 	reason = scsi_dispatch_cmd(cmd);
 	if (reason) {
 		scsi_set_blocked(cmd, reason);
+#if defined(CONFIG_SCSI_UFSHCD_QTI)
+		shost->dispatch_ret = reason;
+		shost->blocked_req = req;
+		trace_printk("[DEBUG] %s: dispatch_ret: %d, blocked_req: 0x%p, blocked_ts: %lld, blocked_count: %d\n",
+				__func__,
+				reason, req, ktime_to_us(shost->host_blocked_ts), shost->host_blocked_count);
+#endif
 		ret = BLK_STS_RESOURCE;
 		goto out_dec_host_busy;
 	}

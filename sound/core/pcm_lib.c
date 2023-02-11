@@ -341,7 +341,12 @@ static int snd_pcm_update_hw_ptr0(struct snd_pcm_substream *substream,
 		 * the elapsed time to detect xruns.
 		 */
 		jdelta = curr_jiffies - runtime->hw_ptr_jiffies;
+#ifdef CONFIG_AUDIO_QGKI
+		if ((jdelta < runtime->hw_ptr_buffer_jiffies / 2) ||
+		    (runtime->hw_ptr_buffer_jiffies <= 0))
+#else
 		if (jdelta < runtime->hw_ptr_buffer_jiffies / 2)
+#endif
 			goto no_delta_check;
 		hdelta = jdelta - delta * HZ / runtime->rate;
 		xrun_threshold = runtime->hw_ptr_buffer_jiffies / 2 + 1;
@@ -1736,7 +1741,7 @@ static int snd_pcm_lib_ioctl_fifo_size(struct snd_pcm_substream *substream,
 		channels = params_channels(params);
 		frame_size = snd_pcm_format_size(format, channels);
 		if (frame_size > 0)
-			params->fifo_size /= (unsigned)frame_size;
+			params->fifo_size /= frame_size;
 	}
 	return 0;
 }
@@ -1840,7 +1845,11 @@ static int wait_for_avail(struct snd_pcm_substream *substream,
 					 runtime->rate;
 				wait_time = max(t, wait_time);
 			}
+#if IS_ENABLED(CONFIG_SND_SOC_SAMSUNG_AUDIO)
+			wait_time = msecs_to_jiffies(wait_time * 100);
+#else
 			wait_time = msecs_to_jiffies(wait_time * 1000);
+#endif
 		}
 	}
 

@@ -148,11 +148,10 @@ struct cam_isp_ctx_irq_ops {
  * @num_acked:                 Count to track acked entried for output.
  *                             If count equals the number of fence out, it means
  *                             the request has been completed.
- * @num_deferred_acks:         Number of buf_dones/acks that are deferred to
- *                             handle or signalled in special scenarios.
- *                             Increment this count instead of num_acked and
- *                             handle the events later where eventually
- *                             increment num_acked.
+ * @num_deferred_acks:         Number of buf_dones/acks that are deferred to handle
+ *                             or signalled in special scenarios. Increment this
+ *                             count instead of num_acked and handle the events
+ *                             later where eventually increment num_acked.
  * @deferred_fence_map_index   Saves the indices of fence_map_out for which
  *                             handling of buf_done is deferred.
  * @bubble_report:             Flag to track if bubble report is active on
@@ -277,7 +276,6 @@ struct cam_isp_context_event_record {
  *                             decide whether to apply request in offline ctx
  * @workq:                     Worker thread for offline ife
  * @trigger_id:                ID provided by CRM for each ctx on the link
- * @last_bufdone_err_apply_req_id:  last bufdone error apply request id
  *
  */
 struct cam_isp_context {
@@ -324,7 +322,6 @@ struct cam_isp_context {
 	atomic_t                              rxd_epoch;
 	struct cam_req_mgr_core_workq        *workq;
 	int32_t                               trigger_id;
-	int64_t                               last_bufdone_err_apply_req_id;
 };
 
 /**

@@ -124,6 +124,14 @@ int cam_cci_init(struct v4l2_subdev *sd,
 		return rc;
 	}
 
+	CAM_INFO(CAM_CCI,
+		"debug init cci:%d ref:%d master:%d sid:0x%x freq:%d",
+		cci_dev->soc_info.index,
+		cci_dev->ref_count,
+		master,
+		c_ctrl->cci_info->sid,
+		c_ctrl->cci_info->i2c_freq_mode);
+
 	if (cci_dev->ref_count++) {
 		rc = cam_cci_init_master(cci_dev, master);
 		if (rc) {
@@ -219,11 +227,11 @@ static void cam_cci_init_cci_params(struct cci_device *new_cci_dev)
 
 	for (i = 0; i < MASTER_MAX; i++) {
 		new_cci_dev->cci_master_info[i].status = 0;
-		new_cci_dev->cci_master_info[i].is_first_req = true;
+		new_cci_dev->cci_master_info[i].freq_ref_cnt = 0;
 		new_cci_dev->cci_master_info[i].is_initilized = false;
 		mutex_init(&new_cci_dev->cci_master_info[i].mutex);
 		sema_init(&new_cci_dev->cci_master_info[i].master_sem, 1);
-		spin_lock_init(&new_cci_dev->cci_master_info[i].freq_cnt);
+		spin_lock_init(&new_cci_dev->cci_master_info[i].freq_cnt_lock);
 		init_completion(
 			&new_cci_dev->cci_master_info[i].reset_complete);
 		init_completion(
@@ -412,6 +420,7 @@ int cam_cci_soc_release(struct cci_device *cci_dev,
 
 	if (!(--cci_dev->master_active_slave[master])) {
 		cci_dev->cci_master_info[master].is_initilized = false;
+		cci_dev->cci_master_info[master].status = 0;
 		CAM_DBG(CAM_CCI,
 			"All submodules are released for master: %d", master);
 	}

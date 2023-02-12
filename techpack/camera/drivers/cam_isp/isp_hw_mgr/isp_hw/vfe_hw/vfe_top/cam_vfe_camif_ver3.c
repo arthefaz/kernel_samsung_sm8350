@@ -405,6 +405,8 @@ static int cam_vfe_camif_ver3_resource_start(
 	 * PP CAMIF currently operates only in offline mode
 	 */
 
+	CAM_INFO(CAM_ISP,"sbi, input_mux_sel_pp = 0x%x", rsrc_data->cam_common_cfg.input_mux_sel_pp );
+
 	if ((rsrc_data->dsp_mode >= CAM_ISP_DSP_MODE_ONE_WAY) &&
 		(rsrc_data->dsp_mode <= CAM_ISP_DSP_MODE_ROUND)) {
 		/* DSP mode reg val is CAM_ISP_DSP_MODE - 1 */

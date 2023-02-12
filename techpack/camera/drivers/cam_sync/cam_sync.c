@@ -364,8 +364,8 @@ int cam_sync_get_obj_ref(int32_t sync_obj)
 	}
 
 	atomic_inc(&row->ref_cnt);
-	spin_unlock(&sync_dev->row_spinlocks[sync_obj]);
 	CAM_DBG(CAM_SYNC, "get ref for obj %d", sync_obj);
+	spin_unlock(&sync_dev->row_spinlocks[sync_obj]);
 
 	return 0;
 }

@@ -132,7 +132,7 @@ static int cam_isp_update_dual_config(
 	}
 	for (i = 0; i < dual_config->num_ports; i++) {
 
-		if (i >= CAM_ISP_IFE_OUT_RES_BASE + size_isp_out) {
+		if (i >= CAM_ISP_IFE_OUT_RES_MAX) {
 			CAM_ERR(CAM_ISP,
 				"failed update for i:%d > size_isp_out:%d",
 				i, size_isp_out);
@@ -151,8 +151,7 @@ static int cam_isp_update_dual_config(
 			res = hw_mgr_res->hw_res[j];
 
 			if (res->res_id < CAM_ISP_IFE_OUT_RES_BASE ||
-				res->res_id >= (CAM_ISP_IFE_OUT_RES_BASE +
-				size_isp_out))
+				res->res_id >= CAM_ISP_IFE_OUT_RES_MAX)
 				continue;
 
 			outport_id = res->res_id & 0xFF;
@@ -476,7 +475,7 @@ int cam_isp_add_io_buffers(
 	struct cam_isp_hw_get_cmd_update    update_buf;
 	struct cam_isp_hw_get_wm_update     wm_update;
 	struct cam_isp_hw_get_wm_update     bus_rd_update;
-	struct cam_hw_fence_map_entry      *out_map_entries = NULL;
+	struct cam_hw_fence_map_entry      *out_map_entries;
 	struct cam_hw_fence_map_entry      *in_map_entries;
 	struct cam_isp_hw_get_cmd_update    secure_mode;
 	uint32_t                            kmd_buf_remain_size;
@@ -743,11 +742,6 @@ int cam_isp_add_io_buffers(
 
 			io_cfg_used_bytes += update_buf.cmd.used_bytes;
 
-			if (!out_map_entries) {
-				CAM_ERR(CAM_ISP, "out_map_entries is NULL");
-				rc = -EINVAL;
-				return rc;
-			}
 
 			image_buf_addr =
 				out_map_entries->image_buf_addr;

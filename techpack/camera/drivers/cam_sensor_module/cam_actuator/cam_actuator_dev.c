@@ -10,6 +10,10 @@
 #include "cam_trace.h"
 #include "camera_main.h"
 
+#if defined(CONFIG_SAMSUNG_OIS_MCU_STM32) || defined(CONFIG_SAMSUNG_OIS_RUMBA_S4) || defined(CONFIG_SAMSUNG_ACTUATOR_PREVENT_SHAKING)
+struct cam_actuator_ctrl_t *g_a_ctrls[SEC_SENSOR_ID_MAX];
+#endif
+
 static long cam_actuator_subdev_ioctl(struct v4l2_subdev *sd,
 	unsigned int cmd, void *arg)
 {
@@ -129,7 +133,7 @@ static int cam_actuator_init_subdev(struct cam_actuator_ctrl_t *a_ctrl)
 	a_ctrl->v4l2_dev_str.token = a_ctrl;
 
 	rc = cam_register_subdev(&(a_ctrl->v4l2_dev_str));
-	if (rc)
+	if ((rc < 0) && (rc != -EPROBE_DEFER))
 		CAM_ERR(CAM_SENSOR, "Fail with cam_register_subdev rc: %d", rc);
 
 	return rc;
@@ -144,11 +148,13 @@ static int32_t cam_actuator_driver_i2c_probe(struct i2c_client *client,
 	struct cam_hw_soc_info          *soc_info = NULL;
 	struct cam_actuator_soc_private *soc_private = NULL;
 
+#if 0
 	if (client == NULL || id == NULL) {
 		CAM_ERR(CAM_ACTUATOR, "Invalid Args client: %pK id: %pK",
 			client, id);
 		return -EINVAL;
 	}
+#endif
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		CAM_ERR(CAM_ACTUATOR, "%s :: i2c_check_functionality failed",
@@ -215,6 +221,12 @@ static int32_t cam_actuator_driver_i2c_probe(struct i2c_client *client,
 		cam_actuator_apply_request;
 	a_ctrl->last_flush_req = 0;
 	a_ctrl->cam_act_state = CAM_ACTUATOR_INIT;
+
+
+#if defined(CONFIG_SAMSUNG_OIS_MCU_STM32) || defined(CONFIG_SAMSUNG_OIS_RUMBA_S4) || defined(CONFIG_SAMSUNG_ACTUATOR_PREVENT_SHAKING)
+	if (a_ctrl->soc_info.index < SEC_SENSOR_ID_MAX)
+		g_a_ctrls[a_ctrl->soc_info.index] = a_ctrl;
+#endif
 
 	return rc;
 
@@ -291,6 +303,12 @@ static int cam_actuator_component_bind(struct device *dev,
 	if (rc)
 		goto free_mem;
 
+	if (soc_private->i2c_info.slave_addr != 0)
+		a_ctrl->io_master_info.cci_client->sid =
+			soc_private->i2c_info.slave_addr >> 1;
+	a_ctrl->io_master_info.cci_client->cci_i2c_master =
+		a_ctrl->cci_i2c_master;
+
 	a_ctrl->bridge_intf.device_hdl = -1;
 	a_ctrl->bridge_intf.link_hdl = -1;
 	a_ctrl->bridge_intf.ops.get_dev_info =
@@ -306,6 +324,11 @@ static int cam_actuator_component_bind(struct device *dev,
 	platform_set_drvdata(pdev, a_ctrl);
 	a_ctrl->cam_act_state = CAM_ACTUATOR_INIT;
 	CAM_DBG(CAM_ACTUATOR, "Component bound successfully");
+
+#if defined(CONFIG_SAMSUNG_OIS_MCU_STM32) || defined(CONFIG_SAMSUNG_OIS_RUMBA_S4) || defined(CONFIG_SAMSUNG_ACTUATOR_PREVENT_SHAKING)
+	if (a_ctrl->soc_info.index < SEC_SENSOR_ID_MAX)
+		g_a_ctrls[a_ctrl->soc_info.index] = a_ctrl;
+#endif
 
 	return rc;
 
@@ -441,6 +464,9 @@ static struct i2c_driver cam_actuator_driver_i2c = {
 	.remove = cam_actuator_driver_i2c_remove,
 	.driver = {
 		.name = ACTUATOR_DRIVER_I2C,
+		.owner = THIS_MODULE,
+		.of_match_table = cam_actuator_driver_dt_match,
+		.suppress_bind_attrs = true,
 	},
 };
 

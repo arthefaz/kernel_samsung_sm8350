@@ -58,6 +58,11 @@ endif
 
 endif
 
+ifeq ($(CONFIG_SEC_P3Q_PROJECT), y)
+LINUXINCLUDE    += \
+		-I$(srctree)/drivers/regulator
+endif
+
 ifneq (,$(filter $(CONFIG_SPECTRA_CAMERA), y m))
 # Use USERINCLUDE when you must reference the UAPI directories only.
 USERINCLUDE     += \

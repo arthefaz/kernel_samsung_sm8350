@@ -368,6 +368,7 @@ static struct cam_camnoc_specific
 			.offset = 0x1034, /* IFE_RDI_RD_PRIORITYLUT_HIGH */
 			.value = 0x0,
 		},
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
 		.urgency = {
 			.enable = true,
 			.access_type = CAM_REG_TYPE_READ_WRITE,
@@ -375,6 +376,15 @@ static struct cam_camnoc_specific
 			.offset = 0x1038, /* IFE_RDI_RD_URGENCY_LOW */
 			.value = 0x2,
 		},
+#else
+		.urgency = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0x1038, /* IFE_RDI_RD_URGENCY_LOW */
+			.value = 0x3,
+		},
+#endif
 		.danger_lut = {
 			.enable = true,
 			.access_type = CAM_REG_TYPE_READ_WRITE,
@@ -434,6 +444,21 @@ static struct cam_camnoc_specific
 			.offset = 0x1434, /* IFE_RDI_WR_0_PRIORITYLUT_HIGH */
 			.value = 0x66666666,
 		},
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+		.urgency = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0x1438, /* IFE_RDI_WR_0_URGENCY_LOW */
+			.value = 0x1070,
+		},
+		.danger_lut = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.offset = 0x1440, /* IFE_RDI_WR_0_DANGERLUT_LOW */
+			.value = 0xFFFFFFF0,
+		},
+#else
 		.urgency = {
 			.enable = true,
 			.access_type = CAM_REG_TYPE_READ_WRITE,
@@ -447,6 +472,7 @@ static struct cam_camnoc_specific
 			.offset = 0x1440, /* IFE_RDI_WR_0_DANGERLUT_LOW */
 			.value = 0xFFFFFF00,
 		},
+#endif
 		.safe_lut = {
 			.enable = true,
 			.access_type = CAM_REG_TYPE_READ_WRITE,
@@ -500,6 +526,21 @@ static struct cam_camnoc_specific
 			.offset = 0x7434, /* IFE_RDI_WR_1_PRIORITYLUT_HIGH */
 			.value = 0x66666666,
 		},
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+		.urgency = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0x7438, /* IFE_RDI_WR_1_URGENCY_LOW */
+			.value = 0x1070,
+		},
+		.danger_lut = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.offset = 0x7440, /* IFE_RDI_WR_1_DANGERLUT_LOW */
+			.value = 0xFFFFFFF0,
+		},
+#else
 		.urgency = {
 			.enable = true,
 			.access_type = CAM_REG_TYPE_READ_WRITE,
@@ -513,6 +554,7 @@ static struct cam_camnoc_specific
 			.offset = 0x7440, /* IFE_RDI_WR_1_DANGERLUT_LOW */
 			.value = 0xFFFFFF00,
 		},
+#endif
 		.safe_lut = {
 			.enable = true,
 			.access_type = CAM_REG_TYPE_READ_WRITE,

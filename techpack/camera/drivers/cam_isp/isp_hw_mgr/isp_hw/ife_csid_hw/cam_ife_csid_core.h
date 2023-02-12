@@ -613,6 +613,7 @@ struct cam_csid_evt_payload {
  * @epd_supported             Flag is set if sensor supports EPD
  * @fatal_err_detected        flag to indicate fatal errror is reported
  * @event_cb                  Callback to hw manager if CSID event reported
+ * @cust_node                 indicates csid is for custom
  */
 struct cam_ife_csid_hw {
 	struct cam_hw_intf              *hw_intf;
@@ -659,6 +660,8 @@ struct cam_ife_csid_hw {
 	uint32_t                         epd_supported;
 	bool                             fatal_err_detected;
 	cam_hw_mgr_event_cb_func         event_cb;
+	int32_t                          ctx_idx;
+	bool                             cust_node;
 };
 
 int cam_ife_csid_hw_probe_init(struct cam_hw_intf  *csid_hw_intf,

@@ -395,6 +395,29 @@ static struct cam_camnoc_specific
 			 */
 			.enable = false,
 		},
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+		.qosgen_mainctl = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0xF08, /* IFE_RDI_RD_QOSGEN_MAINCTL */
+			.value = 0x2,
+		},
+		.qosgen_shaping_low = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0xF20, /* IFE_RDI_RD_QOSGEN_SHAPING_LOW */
+			.value = 0x0C0C0C0C,
+		},
+		.qosgen_shaping_high = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0xF24, /* IFE_RDI_RD_QOSGEN_SHAPING_HIGH */
+			.value = 0x0C0C0C0C,
+		},
+#else
 		.qosgen_mainctl = {
 			.enable = false,
 			.access_type = CAM_REG_TYPE_READ_WRITE,
@@ -416,6 +439,7 @@ static struct cam_camnoc_specific
 			.offset = 0xF24, /* IFE_RDI_RD_QOSGEN_SHAPING_HIGH */
 			.value = 0x0,
 		},
+#endif
 	},
 	{
 		.port_type = CAM_CAMNOC_IFE_RDI_WR,
@@ -752,6 +776,22 @@ static struct cam_camnoc_specific
 			.offset = 0x2208, /* IPE0_RD_QOSGEN_MAINCTL */
 			.value = 0x2,
 		},
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+		.qosgen_shaping_low = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0x2220, /* IPE0_RD_QOSGEN_SHAPING_LOW */
+			.value = 0x0A0A0A0A,
+		},
+		.qosgen_shaping_high = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0x2224, /* IPE0_RD_QOSGEN_SHAPING_HIGH */
+			.value = 0x0A0A0A0A,
+		},
+#else
 		.qosgen_shaping_low = {
 			.enable = true,
 			.access_type = CAM_REG_TYPE_READ_WRITE,
@@ -766,6 +806,7 @@ static struct cam_camnoc_specific
 			.offset = 0x2224, /* IPE0_RD_QOSGEN_SHAPING_HIGH */
 			.value = 0x13131313,
 		},
+#endif
 	},
 	{
 		.port_type = CAM_CAMNOC_IPE1_BPS_RD,
@@ -824,6 +865,22 @@ static struct cam_camnoc_specific
 			.offset = 0x2308, /* IPE1_BPS_RD_QOSGEN_MAINCTL */
 			.value = 0x2,
 		},
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+		.qosgen_shaping_low = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0x2320, /* IPE1_BPS_RD_QOSGEN_SHAPING_LOW */
+			.value = 0x0A0A0A0A,
+		},
+		.qosgen_shaping_high = {
+			.enable = true,
+			.access_type = CAM_REG_TYPE_READ_WRITE,
+			.masked_value = 0,
+			.offset = 0x2324, /* IPE1_BPS_RD_QOSGEN_SHAPING_HIGH */
+			.value = 0x0A0A0A0A,
+		},
+#else
 		.qosgen_shaping_low = {
 			.enable = true,
 			.access_type = CAM_REG_TYPE_READ_WRITE,
@@ -838,6 +895,7 @@ static struct cam_camnoc_specific
 			.offset = 0x2324, /* IPE1_BPS_RD_QOSGEN_SHAPING_HIGH */
 			.value = 0x24242424,
 		},
+#endif
 	},
 	{
 		.port_type = CAM_CAMNOC_IPE_BPS_WR,

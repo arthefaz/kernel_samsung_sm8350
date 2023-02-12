@@ -227,6 +227,9 @@ struct cam_cpas_monitor {
 	uint32_t                            be_ddr;
 	uint32_t                            fe_mnoc;
 	uint32_t                            be_mnoc;
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+	uint32_t                            be_shub;
+#endif
 	uint32_t                            camnoc_fill_level[5];
 };
 
@@ -281,6 +284,9 @@ struct cam_cpas {
 	atomic64_t  monitor_head;
 	struct cam_cpas_monitor monitor_entries[CAM_CPAS_MONITOR_MAX_ENTRIES];
 	bool full_state_dump;
+#if defined(CONFIG_SAMSUNG_SBI)
+	bool uhd_in_progress;
+#endif
 };
 
 int cam_camsstop_get_internal_ops(struct cam_cpas_internal_ops *internal_ops);

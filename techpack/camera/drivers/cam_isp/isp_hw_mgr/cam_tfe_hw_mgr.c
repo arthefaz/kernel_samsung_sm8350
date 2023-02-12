@@ -2873,14 +2873,14 @@ static int cam_tfe_mgr_stop_hw(void *hw_mgr_priv, void *stop_hw_args)
 	wait_for_completion_timeout(&ctx->config_done_complete,
 		msecs_to_jiffies(5));
 
-	if (ctx->is_tpg)
-		cam_tfe_hw_mgr_stop_hw_res(&ctx->res_list_tpg);
-
 	if (stop_isp->stop_only)
 		goto end;
 
 	if (cam_cdm_stream_off(ctx->cdm_handle))
 		CAM_ERR(CAM_ISP, "CDM stream off failed %d", ctx->cdm_handle);
+
+	if (ctx->is_tpg)
+		cam_tfe_hw_mgr_stop_hw_res(&ctx->res_list_tpg);
 
 	cam_tfe_hw_mgr_deinit_hw(ctx);
 
@@ -3010,12 +3010,11 @@ static int cam_tfe_mgr_start_hw(void *hw_mgr_priv, void *start_hw_args)
 	struct cam_isp_stop_args          stop_isp;
 	struct cam_tfe_hw_mgr_ctx        *ctx;
 	struct cam_isp_hw_mgr_res        *hw_mgr_res;
-	struct cam_hw_intf               *hw_intf;
-	uint32_t                          i;
+	struct cam_isp_resource_node     *rsrc_node = NULL;
+	uint32_t                          i, camif_debug;
 	bool                              res_rdi_context_set = false;
 	uint32_t                          primary_rdi_in_res;
 	uint32_t                          primary_rdi_out_res;
-	bool                              hw_id[CAM_TFE_HW_NUM_MAX] = {0};
 
 	primary_rdi_in_res = CAM_ISP_HW_TFE_IN_MAX;
 	primary_rdi_out_res = CAM_ISP_TFE_OUT_RES_MAX;
@@ -3048,40 +3047,31 @@ static int cam_tfe_mgr_start_hw(void *hw_mgr_priv, void *start_hw_args)
 	if (ctx->init_done && start_isp->start_only)
 		goto start_only;
 
-	list_for_each_entry(hw_mgr_res, &ctx->res_list_tfe_csid, list) {
-		for (i = 0; i < CAM_ISP_HW_SPLIT_MAX; i++) {
-			if (!hw_mgr_res->hw_res[i])
-				continue;
-
-			hw_intf = hw_mgr_res->hw_res[i]->hw_intf;
-			if (hw_id[hw_intf->hw_idx])
-				continue;
-
-			rc = hw_intf->hw_ops.process_cmd(
-				hw_intf->hw_priv,
+	/* set current csid debug information to CSID HW */
+	for (i = 0; i < CAM_TFE_CSID_HW_NUM_MAX; i++) {
+		if (g_tfe_hw_mgr.csid_devices[i])
+			rc = g_tfe_hw_mgr.csid_devices[i]->hw_ops.process_cmd(
+				g_tfe_hw_mgr.csid_devices[i]->hw_priv,
 				CAM_TFE_CSID_SET_CSID_DEBUG,
 				&g_tfe_hw_mgr.debug_cfg.csid_debug,
 				sizeof(g_tfe_hw_mgr.debug_cfg.csid_debug));
-			hw_id[hw_intf->hw_idx] = true;
-		}
 	}
 
-	memset(&hw_id[0], 0, sizeof(hw_id));
+	camif_debug = g_tfe_hw_mgr.debug_cfg.camif_debug;
 	list_for_each_entry(hw_mgr_res, &ctx->res_list_tfe_in, list) {
 		for (i = 0; i < CAM_ISP_HW_SPLIT_MAX; i++) {
 			if (!hw_mgr_res->hw_res[i])
 				continue;
 
-			hw_intf = hw_mgr_res->hw_res[i]->hw_intf;
-			if (hw_id[hw_intf->hw_idx])
-				continue;
-
-			rc = hw_intf->hw_ops.process_cmd(
-				hw_intf->hw_priv,
-				CAM_ISP_HW_CMD_SET_CAMIF_DEBUG,
-				&g_tfe_hw_mgr.debug_cfg.camif_debug,
-				sizeof(g_tfe_hw_mgr.debug_cfg.camif_debug));
-			hw_id[hw_intf->hw_idx] = true;
+			rsrc_node = hw_mgr_res->hw_res[i];
+			if (rsrc_node->process_cmd && (rsrc_node->res_id ==
+				CAM_ISP_HW_TFE_IN_CAMIF)) {
+				rc = hw_mgr_res->hw_res[i]->process_cmd(
+					hw_mgr_res->hw_res[i],
+					CAM_ISP_HW_CMD_SET_CAMIF_DEBUG,
+					&camif_debug,
+					sizeof(camif_debug));
+			}
 		}
 	}
 

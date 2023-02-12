@@ -32,6 +32,9 @@
 #define CAM_JPEG_HW_IRQ_IS_STOP_DONE(jpeg_irq_status, hi) \
 	((jpeg_irq_status) & (hi)->int_status.stopdone)
 
+#define CAM_JPEG_HW_IRQ_STATUS_WR_BUF_PLN0_DONE        (0x1 << 10)
+#define CAM_JPEG_HW_IRQ_STATUS_WR_BUF_PLN0_REQ_ATTN    (0x1 << 13)
+
 #define CAM_JPEG_ENC_RESET_TIMEOUT msecs_to_jiffies(500)
 
 int cam_jpeg_enc_init_hw(void *device_priv,
@@ -199,10 +202,30 @@ irqreturn_t cam_jpeg_enc_irq(int irq_num, void *data)
 	CAM_DBG(CAM_JPEG, "irq_num %d  irq_status = %x , core_state %d",
 		irq_num, irq_status, core_info->core_state);
 
+	/* Insufficient buffer, end of buffer error */
+	if (irq_status & CAM_JPEG_HW_IRQ_STATUS_WR_BUF_PLN0_REQ_ATTN ||
+		irq_status & CAM_JPEG_HW_IRQ_STATUS_WR_BUF_PLN0_DONE) {
+		spin_lock(&jpeg_enc_dev->hw_lock);
+		encoded_size = cam_io_r_mb(mem_base +
+		core_info->jpeg_enc_hw_info->reg_offset.encode_size);
+		CAM_ERR(CAM_JPEG,
+			"buffer end error irq_num %d  irq_status = %x , core_state %d encoded_size %d",
+			irq_num, irq_status, core_info->core_state, encoded_size);
+
+		if (core_info->irq_cb.jpeg_hw_mgr_cb) {
+			core_info->irq_cb.jpeg_hw_mgr_cb(irq_status,
+				-1,
+				core_info->irq_cb.data);
+		}
+		core_info->core_state = CAM_JPEG_ENC_CORE_NOT_READY;
+		spin_unlock(&jpeg_enc_dev->hw_lock);
+
+		return IRQ_HANDLED;
+	}
+
 	if (CAM_JPEG_HW_IRQ_IS_FRAME_DONE(irq_status, hw_info)) {
 		spin_lock(&jpeg_enc_dev->hw_lock);
 		if (core_info->core_state == CAM_JPEG_ENC_CORE_READY) {
-			CAM_TRACE(CAM_JPEG, "FrameDone IRQ");
 			encoded_size = cam_io_r_mb(mem_base +
 			core_info->jpeg_enc_hw_info->reg_offset.encode_size);
 			if (core_info->irq_cb.jpeg_hw_mgr_cb) {

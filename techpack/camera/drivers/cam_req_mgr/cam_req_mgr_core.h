@@ -13,7 +13,7 @@
 #define CAM_REQ_MGR_MAX_LINKED_DEV     16
 #define MAX_REQ_SLOTS                  48
 
-#define CAM_REQ_MGR_WATCHDOG_TIMEOUT          1000
+#define CAM_REQ_MGR_WATCHDOG_TIMEOUT          5000
 #define CAM_REQ_MGR_WATCHDOG_TIMEOUT_DEFAULT  5000
 #define CAM_REQ_MGR_WATCHDOG_TIMEOUT_MAX      50000
 #define CAM_REQ_MGR_SCHED_REQ_TIMEOUT         1000
@@ -252,6 +252,7 @@ struct cam_req_mgr_req_tbl {
  * @recover            : if user enabled recovery for this request.
  * @req_id             : mask tracking which all devices have request ready
  * @sync_mode          : Sync mode in which req id in this slot has to applied
+ * @err_reported       : Error has been reported on this slot
  * @additional_timeout : Adjusted watchdog timeout value associated with
  * this request
  */
@@ -262,6 +263,7 @@ struct cam_req_mgr_slot {
 	int32_t               recover;
 	int64_t               req_id;
 	int32_t               sync_mode;
+	bool                  err_reported;
 	int32_t               additional_timeout;
 };
 
@@ -363,6 +365,8 @@ struct cam_req_mgr_connected_device {
  *                         other link
  * @retry_cnt            : Counter that tracks number of attempts to apply
  *                         the same req
+ * @wq_retry_cnt         : Counter that tracks number of attempts to apply
+ *                         the same req including wq delays
  * @is_shutdown          : Flag to indicate if link needs to be disconnected
  *                         as part of shutdown.
  * @sof_timestamp_value  : SOF timestamp value
@@ -373,8 +377,7 @@ struct cam_req_mgr_connected_device {
  * @eof_event_cnt        : Atomic variable to track the number of EOF requests
  * @skip_init_frame      : skip initial frames crm_wd_timer validation in the
  *                         case of long exposure use case
- * @last_sof_trigger_jiffies : Record the jiffies of last sof trigger jiffies
- * @wq_congestion        : Indicates if WQ congestion is detected or not
+ * @last_applied_jiffies : Record the jiffies of last applied req
  */
 struct cam_req_mgr_core_link {
 	int32_t                              link_hdl;
@@ -404,6 +407,7 @@ struct cam_req_mgr_core_link {
 	bool                                 in_msync_mode;
 	int64_t                              initial_sync_req;
 	uint32_t                             retry_cnt;
+	uint32_t                             wq_retry_cnt;	
 	bool                                 is_shutdown;
 	uint64_t                             sof_timestamp;
 	uint64_t                             prev_sof_timestamp;
@@ -411,8 +415,7 @@ struct cam_req_mgr_core_link {
 	uint32_t    trigger_cnt[CAM_REQ_MGR_MAX_TRIGGERS];
 	atomic_t                             eof_event_cnt;
 	bool                                 skip_init_frame;
-	uint64_t                             last_sof_trigger_jiffies;
-	bool                                 wq_congestion;
+	uint64_t                             last_applied_jiffies;
 };
 
 /**

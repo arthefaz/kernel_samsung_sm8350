@@ -49,4 +49,11 @@ irqreturn_t cam_csiphy_irq(int irq_num, void *data);
  */
 void cam_csiphy_shutdown(struct csiphy_device *csiphy_dev);
 
+/**
+ * @soc_idx : CSIPHY cell index
+ *
+ * This API registers base address per soc_idx
+ */
+void cam_csiphy_register_baseaddress(struct csiphy_device *csiphy_dev);
+
 #endif /* _CAM_CSIPHY_CORE_H_ */

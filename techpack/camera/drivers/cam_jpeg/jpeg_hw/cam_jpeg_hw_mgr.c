@@ -139,9 +139,6 @@ static int cam_jpeg_process_next_hw_update(void *priv, void *data,
 		rc = -EINVAL;
 		goto end_error;
 	}
-
-	CAM_TRACE(CAM_JPEG, "Start JPEG ENC Req %llu", config_args->request_id);
-
 	rc = hw_mgr->devices[dev_type][0]->hw_ops.start(
 		hw_mgr->devices[dev_type][0]->hw_priv, NULL, 0);
 	if (rc) {
@@ -812,10 +809,12 @@ static int cam_jpeg_mgr_prepare_hw_update(void *hw_mgr_priv,
 	}
 
 	if ((packet->num_cmd_buf > 5) || !packet->num_patches ||
-		!packet->num_io_configs) {
-		CAM_ERR(CAM_JPEG, "wrong number of cmd/patch info: %u %u",
-			packet->num_cmd_buf,
-			packet->num_patches);
+		!packet->num_io_configs ||
+		(packet->num_io_configs > CAM_JPEG_IMAGE_MAX)) {
+		CAM_ERR(CAM_JPEG, "wrong number of cmd/patch info: %u %u %u",
+			packet->num_cmd_buf, packet->num_patches,
+			packet->num_io_configs);
+
 		return -EINVAL;
 	}
 

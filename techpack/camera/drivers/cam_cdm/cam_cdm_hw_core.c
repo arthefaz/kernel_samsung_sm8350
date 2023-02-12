@@ -436,6 +436,7 @@ void cam_hw_cdm_dump_core_debug_registers(struct cam_hw_info *cdm_hw,
 	cam_hw_cdm_disable_core_dbg(cdm_hw);
 	if (pause_core)
 		cam_hw_cdm_pause_core(cdm_hw, false);
+
 }
 
 enum cam_cdm_arbitration cam_cdm_get_arbitration_type(

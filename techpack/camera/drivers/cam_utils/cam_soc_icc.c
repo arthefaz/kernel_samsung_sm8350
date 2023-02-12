@@ -13,6 +13,10 @@
  */
 struct cam_soc_bus_client_data {
 	struct icc_path *icc_data;
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+	uint32_t num_additional_paths;
+	struct icc_path *additional_paths[2];
+#endif
 };
 
 int cam_soc_bus_client_update_request(void *client, unsigned int idx)
@@ -49,8 +53,12 @@ int cam_soc_bus_client_update_request(void *client, unsigned int idx)
 end:
 	return rc;
 }
-
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+int cam_soc_bus_client_update_bw(void *client, uint64_t ab, uint64_t ib,
+	uint64_t additional_ib)
+#else
 int cam_soc_bus_client_update_bw(void *client, uint64_t ab, uint64_t ib)
+#endif
 {
 	struct cam_soc_bus_client *bus_client =
 		(struct cam_soc_bus_client *) client;
@@ -67,7 +75,19 @@ int cam_soc_bus_client_update_bw(void *client, uint64_t ab, uint64_t ib)
 			bus_client->common_data->name);
 		goto end;
 	}
-
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+	if (bus_client_data->num_additional_paths > 0) {
+		CAM_DBG(CAM_PERF, "Bus client=[%s] : Additional path :ab[%llu] ib[%llu]",
+			bus_client->common_data->name, 0, additional_ib);
+		rc = icc_set_bw(bus_client_data->additional_paths[0], 0,
+			Bps_to_icc(additional_ib));
+		if (rc) {
+			CAM_ERR(CAM_UTIL, "Update request failed, client[%s]",
+				bus_client->common_data->name);
+			rc = 0;
+		}
+	}
+#endif
 end:
 	return rc;
 }
@@ -119,7 +139,33 @@ int cam_soc_bus_client_register(struct platform_device *pdev,
 	CAM_DBG(CAM_PERF, "Register Bus Client=[%s] : src=%d, dst=%d",
 		bus_client->common_data->name, bus_client->common_data->src_id,
 		bus_client->common_data->dst_id);
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+	if (bus_client->common_data->num_additional_paths > 0) {
+		bus_client_data->additional_paths[0] = icc_get(&pdev->dev,
+			bus_client->common_data->add_src_id[0],
+			bus_client->common_data->add_dst_id[0]);
+		if (!bus_client_data->additional_paths[0]) {
+			CAM_ERR(CAM_UTIL, "failed in register bus client");
+			rc = 0;
+			goto done;
+		}
 
+		rc = icc_set_bw(bus_client_data->additional_paths[0], 0, 0);
+		if (rc) {
+			CAM_ERR(CAM_UTIL, "Bus client update request failed, rc = %d",
+				rc);
+			goto fail_unregister_client;
+		}
+
+		CAM_DBG(CAM_PERF, "Register Bus Client=[%s] : src=%d, dst=%d",
+			bus_client->common_data->name, bus_client->common_data->add_src_id[0],
+			bus_client->common_data->add_dst_id[0]);
+
+		bus_client_data->num_additional_paths = 1;
+	}
+
+done:
+#endif
 	return 0;
 
 fail_unregister_client:
@@ -142,6 +188,10 @@ void cam_soc_bus_client_unregister(void **client)
 		(struct cam_soc_bus_client_data *) bus_client->client_data;
 
 	icc_put(bus_client_data->icc_data);
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+	if (bus_client_data->num_additional_paths > 0)
+		icc_put(bus_client_data->additional_paths[0]);
+#endif
 	kfree(bus_client_data);
 	bus_client->client_data = NULL;
 	kfree(bus_client);

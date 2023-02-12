@@ -117,6 +117,7 @@ struct csiphy_reg_parms_t {
 	uint32_t csiphy_cpas_cp_3ph_offset;
 	uint32_t csiphy_2ph_clock_lane;
 	uint32_t csiphy_2ph_combo_ck_ln;
+	uint32_t prgm_cmn_reg_across_csiphy;
 };
 
 /**
@@ -232,6 +233,7 @@ struct cam_csiphy_param {
 	uint16_t                   mipi_flags;
 	uint64_t                   csiphy_cpas_cp_reg_mask;
 	struct csiphy_hdl_tbl      hdl_data;
+	uint16_t                   shooting_mode;
 };
 
 /**

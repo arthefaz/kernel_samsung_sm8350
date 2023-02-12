@@ -129,6 +129,10 @@ struct cam_ois_opcode {
  * @ois_fw_flag           :    indicates if fw is present or not
  * @is_ois_calib          :    indicates the calibration data is available
  * @ois_name              :    OIS name
+ * @gyro_raw_x            :    gyro_raw_x
+ * @gyro_raw_y            :    gyro_raw_y
+ * @gyro_raw_z            :    gyro_raw_z
+ * @efs_cal               :    EFS CAL
  * @opcode                :    opcode
  */
 struct cam_cmd_ois_info {
@@ -137,6 +141,12 @@ struct cam_cmd_ois_info {
 	__u8                  cmd_type;
 	__u8                  ois_fw_flag;
 	__u8                  is_ois_calib;
+#if 1
+	__u32                 gyro_raw_x;
+	__u32                 gyro_raw_y;
+	__u32                 gyro_raw_z;
+	__u32                 efs_cal;
+#endif
 	char                  ois_name[MAX_OIS_NAME_SIZE];
 	struct cam_ois_opcode opcode;
 } __attribute__((packed));
@@ -341,6 +351,7 @@ struct cam_csiphy_info {
 	__u8     secure_mode;
 	__u64    settle_time;
 	__u64    data_rate;
+	__u16    shooting_mode;
 } __attribute__((packed));
 
 /**
@@ -375,6 +386,17 @@ struct cam_sensor_acquire_dev {
 	__u32    handle_type;
 	__u32    reserved;
 	__u64    info_handle;
+} __attribute__((packed));
+
+/**
+ * cam_sensor_release_dev : Updates sensor acuire cmd
+ * @session_handle :    Session handle for acquiring device
+ * @device_handle  :    Updates device handle
+ *
+ */
+struct cam_sensor_release_dev {
+	__u32    session_handle;
+	__u32    device_handle;
 } __attribute__((packed));
 
 /**

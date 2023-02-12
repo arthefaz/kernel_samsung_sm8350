@@ -185,6 +185,9 @@ enum cam_req_mgr_device_id {
 	CAM_REQ_MGR_DEVICE_EXTERNAL_1,
 	CAM_REQ_MGR_DEVICE_EXTERNAL_2,
 	CAM_REQ_MGR_DEVICE_EXTERNAL_3,
+#if defined(CONFIG_SAMSUNG_SBI)
+	CAM_REQ_MGR_DEVICE_SBI,
+#endif
 	CAM_REQ_MGR_DEVICE_ID_MAX,
 };
 
@@ -337,6 +340,7 @@ struct cam_req_mgr_core_dev_link_setup {
  * @report_if_bubble : report to crm if failure in applying
  * @trigger_point    : the trigger point of this apply
  * @re_apply         : to skip re_apply for buf_done request
+ * @recovery_apply   : Indicates if this apply is for recovery (bubble/error)
  *
  */
 struct cam_req_mgr_apply_request {
@@ -346,6 +350,7 @@ struct cam_req_mgr_apply_request {
 	int32_t    report_if_bubble;
 	uint32_t   trigger_point;
 	bool       re_apply;
+	bool       recovery_apply;
 };
 
 /**

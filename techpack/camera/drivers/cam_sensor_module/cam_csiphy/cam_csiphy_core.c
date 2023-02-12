@@ -35,8 +35,29 @@
 /* Mask to enable skew calibration registers */
 #define SKEW_CAL_MASK 0x2
 
+static DEFINE_MUTEX(active_csiphy_cnt_mutex);
+
 static int csiphy_dump;
 module_param(csiphy_dump, int, 0644);
+
+struct g_csiphy_data {
+	void __iomem *base_address;
+	uint8_t is_3phase;
+};
+
+static struct g_csiphy_data g_phy_data[MAX_CSIPHY] = {{0, 0}};
+static int active_csiphy_hw_cnt = 0;
+
+#define CSIPHY_TUNNING
+#if defined(CSIPHY_TUNNING)
+#define MAX_TUNNING_NUM (30)
+static int csiphy_tunning_addrs[MAX_TUNNING_NUM];
+static int addr_count;
+module_param_array(csiphy_tunning_addrs, int, &addr_count, 0644);
+static int csiphy_tunning_datas[MAX_TUNNING_NUM];
+static int data_count;
+module_param_array(csiphy_tunning_datas, int, &data_count, 0644);
+#endif
 
 int32_t cam_csiphy_get_instance_offset(
 	struct csiphy_device *csiphy_dev,
@@ -106,6 +127,57 @@ void cam_csiphy_reset(struct csiphy_device *csiphy_dev)
 			csiphy_dev->ctrl_reg->csiphy_reset_reg[i].delay,
 			csiphy_dev->ctrl_reg->csiphy_reset_reg[i].delay
 			+ 5);
+	}
+}
+
+static void csiphy_prgm_cmn_data(
+	struct csiphy_device *csiphy_dev,
+	bool reset)
+{
+	int csiphy_idx = 0;
+	uint32_t size = 0;
+	int i = 0;
+	void __iomem *csiphybase;
+	bool is_3phase = false;
+	struct csiphy_reg_t *csiphy_common_reg = NULL;
+
+	size = csiphy_dev->ctrl_reg->csiphy_reg.csiphy_common_array_size;
+
+	if (active_csiphy_hw_cnt < 0 || active_csiphy_hw_cnt >= MAX_CSIPHY) {
+		CAM_WARN(CAM_CSIPHY,
+			"MisMatched in active phy hw: %d and Max supported: %d",
+			active_csiphy_hw_cnt, MAX_CSIPHY);
+		return;
+	}
+
+	if (active_csiphy_hw_cnt == 0) {
+		CAM_DBG(CAM_CSIPHY, "CSIPHYs HW state needs to be %s",
+			(reset == true) ? "reset" : "set");
+	} else {
+		CAM_DBG(CAM_CSIPHY, "Active CSIPHY hws are %d",
+			active_csiphy_hw_cnt);
+		return;
+	}
+
+	for (csiphy_idx = 0; csiphy_idx < MAX_CSIPHY; csiphy_idx++) {
+		csiphybase = g_phy_data[csiphy_idx].base_address;
+		is_3phase = g_phy_data[csiphy_idx].is_3phase;
+
+		for (i = 0; i < size; i++) {
+			csiphy_common_reg = &csiphy_dev->ctrl_reg->csiphy_common_reg[i];
+			switch (csiphy_common_reg->csiphy_param_type) {
+			case CSIPHY_DEFAULT_PARAMS:
+				cam_io_w_mb((reset == true) ? 0x00 :
+					csiphy_common_reg->reg_data,
+					csiphybase + csiphy_common_reg->reg_addr);
+				break;
+			default:
+				break;
+			}
+			if (csiphy_common_reg->delay > 0)
+				usleep_range(csiphy_common_reg->delay,
+					csiphy_common_reg->delay + 5);
+		}
 	}
 }
 
@@ -374,6 +446,8 @@ int32_t cam_cmd_buf_parser(struct csiphy_device *csiphy_dev,
 		cam_cmd_csiphy_info->secure_mode;
 	csiphy_dev->csiphy_info[index].mipi_flags =
 		cam_cmd_csiphy_info->mipi_flags;
+	csiphy_dev->csiphy_info[index].shooting_mode =
+		cam_cmd_csiphy_info->shooting_mode;
 
 	lane_assign = csiphy_dev->csiphy_info[index].lane_assign;
 	lane_cnt = csiphy_dev->csiphy_info[index].lane_cnt;
@@ -521,6 +595,184 @@ static int cam_csiphy_cphy_get_data_rate_lane_idx(
 	return rc;
 }
 
+#if defined(CSIPHY_TUNNING)
+static void cam_csiphy_cphy_overwrite_config(
+		struct csiphy_device *csiphy_device, int32_t data_rate_idx)
+{
+	void __iomem *csiphybase = NULL;
+	int *addrs = NULL, *datas = NULL;
+	int i = 0, tunning_size = 0;
+
+	if ((csiphy_device == NULL) ||
+		(csiphy_device->ctrl_reg == NULL) ||
+		(csiphy_device->ctrl_reg->data_rates_settings_table == NULL)) {
+		CAM_DBG(CAM_CSIPHY,
+			"Data rate specific register table not found");
+		return;
+	}
+
+	csiphybase =
+		csiphy_device->soc_info.reg_map[0].mem_base;
+
+	if ((data_rate_idx == 0) || (data_rate_idx == 1)) {// 2.5Gsps, 3.5Gsps
+#if defined(CONFIG_SEC_O1Q_PROJECT) || defined(CONFIG_SEC_T2Q_PROJECT)
+		int tele_tunning_addr[] = { 0x9B4, 0xAB4, 0xBB4,
+									0x154, 0x354, 0x554,
+									0x168, 0x368, 0x568  };
+
+		int wide_tunning_addr[] = { 0x9B4, 0xAB4, 0xBB4 };
+
+		int uw_tunning_addr[] = { 0x9B4, 0xAB4, 0xBB4 };
+
+#if defined(CONFIG_SEC_O1Q_PROJECT)
+		int tele_tunning_data[] = { 0x09, 0x09, 0x09,
+									0x20, 0x20, 0x20,
+									0x40, 0x40, 0x40};
+
+		int wide_tunning_data[] = { 0x05, 0x05, 0x05 };
+
+		int uw_tunning_data[] = { 0x08, 0x08, 0x08 };
+#endif
+#if defined(CONFIG_SEC_T2Q_PROJECT)
+		int tele_tunning_data[] = { 0x08, 0x08, 0x08,
+									0x20, 0x20, 0x20,
+									0x40, 0x40, 0x40};
+
+		int wide_tunning_data[] = { 0x03, 0x03, 0x03 };
+
+		int uw_tunning_data[] = { 0x09, 0x09, 0x09 };
+#endif
+
+
+		if (csiphy_device->soc_info.index == 1) { // Tele sensor
+			addrs = tele_tunning_addr;
+			datas = tele_tunning_data;
+			tunning_size = ARRAY_SIZE(tele_tunning_addr);
+			if (ARRAY_SIZE(tele_tunning_data) < tunning_size)
+				tunning_size = ARRAY_SIZE(tele_tunning_data);
+		}
+
+		if (csiphy_device->soc_info.index == 0) { // Wide sensor
+			addrs = wide_tunning_addr;
+			datas = wide_tunning_data;
+			tunning_size = ARRAY_SIZE(wide_tunning_addr);
+			if (ARRAY_SIZE(wide_tunning_data) < tunning_size)
+				tunning_size = ARRAY_SIZE(wide_tunning_data);
+		}
+
+		if (csiphy_device->soc_info.index == 4) { // UW sensor
+			addrs = uw_tunning_addr;
+			datas = uw_tunning_data;
+			tunning_size = ARRAY_SIZE(uw_tunning_addr);
+			if (ARRAY_SIZE(uw_tunning_data) < tunning_size)
+				tunning_size = ARRAY_SIZE(uw_tunning_data);
+		}
+
+#endif
+
+#if defined(CONFIG_SEC_P3Q_PROJECT)
+		int wide_tunning_addr[] = { 0x98C, 0xA8C, 0xB8C,
+									0x9B4, 0xAB4, 0xBB4 };
+		int wide_tunning_data[] = { 0xA0, 0xA0, 0xA0,
+									0x08, 0x08, 0x08 };
+
+		int ssm_tunning_addr[] = { 0x9B4, 0xAB4, 0xBB4};
+		int ssm_tunning_data[] = { 0x05, 0x05, 0x05};
+
+		if (csiphy_device->soc_info.index == 3) { // Wide sensor
+			addrs = wide_tunning_addr;
+			datas = wide_tunning_data;
+			tunning_size = ARRAY_SIZE(wide_tunning_addr);
+			if (ARRAY_SIZE(wide_tunning_data) < tunning_size)
+				tunning_size = ARRAY_SIZE(wide_tunning_data);
+		}
+
+		if (csiphy_device->soc_info.index == 2 &&
+			csiphy_device->csiphy_info[0].shooting_mode == CAM_SHOOTING_MODE_SUPER_SLOW_MOTION) { // ultra Wide sensor
+
+			addrs = ssm_tunning_addr;
+			datas = ssm_tunning_data;
+			tunning_size = ARRAY_SIZE(ssm_tunning_addr);
+			if (ARRAY_SIZE(ssm_tunning_data) < tunning_size)
+				tunning_size = ARRAY_SIZE(ssm_tunning_data);
+
+		}
+#endif
+
+#if defined(CONFIG_SEC_B2Q_PROJECT)
+		int wide_tunning_addr[] = { 0x98C, 0xA8C, 0xB8C,
+					0x9B4, 0xAB4, 0xBB4,
+					0x16C, 0x36C, 0x56C };
+
+		int wide_tunning_data[] = { 0xA0, 0xA0, 0xA0,
+					0x08, 0x08, 0x08,
+					0x17, 0x17, 0x17 };
+					
+		if (csiphy_device->soc_info.index == 0) { // Wide sensor
+			addrs = wide_tunning_addr;
+                        datas = wide_tunning_data;
+			tunning_size = ARRAY_SIZE(wide_tunning_addr);
+			if (ARRAY_SIZE(wide_tunning_data) < tunning_size)
+				tunning_size = ARRAY_SIZE(wide_tunning_data);
+		}
+#endif
+
+#if defined(CONFIG_SEC_Q2Q_PROJECT) || defined(CONFIG_SEC_V2Q_PROJECT)
+				int wide_tunning_addr[] = { 0x98C, 0xA8C, 0xB8C };
+		
+				int wide_tunning_data[] = { 0xA0, 0xA0, 0xA0 };
+		
+				if (csiphy_device->soc_info.index == 0) { // Wide sensor
+					addrs = wide_tunning_addr;
+					datas = wide_tunning_data;
+					tunning_size = ARRAY_SIZE(wide_tunning_addr);
+					if (ARRAY_SIZE(wide_tunning_data) < tunning_size)
+						tunning_size = ARRAY_SIZE(wide_tunning_data);
+				}
+#endif
+
+#if defined(CONFIG_SEC_R9Q_PROJECT)
+		int wide_tunning_addr[] = { 0x98C, 0xA8C, 0xB8C,
+					0x9B4, 0xAB4, 0xBB4,
+					0x16C, 0x36C, 0x56C };
+
+		int wide_tunning_data[] = { 0xA0, 0xA0, 0xA0,
+					0x07, 0x07, 0x07,
+					0x00, 0x00, 0x00 };
+
+		if (csiphy_device->soc_info.index == 0) { // Wide sensor
+			addrs = wide_tunning_addr;
+			datas = wide_tunning_data;
+			tunning_size = ARRAY_SIZE(wide_tunning_addr);
+			if (ARRAY_SIZE(wide_tunning_data) < tunning_size)
+				tunning_size = ARRAY_SIZE(wide_tunning_data);
+		}
+#endif
+
+		for (i = 0; i < tunning_size; i++) {
+			CAM_INFO(CAM_CSIPHY, "Set CSIPHY register : [0x%x] 0x%x",
+				addrs[i], datas[i]);
+			cam_io_w_mb(datas[i],
+				csiphybase + addrs[i]);
+		}
+	}
+
+	addrs = csiphy_tunning_addrs;
+	datas = csiphy_tunning_datas;
+	tunning_size = (data_count < addr_count) ? data_count : addr_count;
+	if (tunning_size > MAX_TUNNING_NUM)
+		tunning_size = MAX_TUNNING_NUM;
+	for (i = 0; i < tunning_size; i++) {
+		if (addrs[i] > 0) {
+			CAM_INFO(CAM_CSIPHY, "Set CSIPHY register : [0x%x] 0x%x",
+				addrs[i], datas[i]);
+			cam_io_w_mb(datas[i],
+				csiphybase + addrs[i]);
+		}
+	}
+}
+#endif
+
 static int cam_csiphy_cphy_data_rate_config(
 	struct csiphy_device *csiphy_device, int32_t idx)
 {
@@ -639,6 +891,10 @@ static int cam_csiphy_cphy_data_rate_config(
 					usleep_range(delay, delay + 5);
 			}
 		}
+
+#if defined(CSIPHY_TUNNING)
+		cam_csiphy_cphy_overwrite_config(csiphy_device, data_rate_idx);
+#endif
 		break;
 	}
 
@@ -1132,6 +1388,15 @@ int32_t cam_csiphy_core_cfg(void *phy_dev,
 			goto release_mutex;
 		}
 
+		if (!csiphy_dev->acquire_count) {
+			g_phy_data[csiphy_dev->soc_info.index].is_3phase =
+					csiphy_acq_params.csiphy_3phase;
+			CAM_DBG(CAM_CSIPHY,
+					"g_csiphy data is updated for index: %d is_3phase: %u",
+					csiphy_dev->soc_info.index,
+					g_phy_data[csiphy_dev->soc_info.index].is_3phase);
+		}
+
 		csiphy_dev->acquire_count++;
 		CAM_DBG(CAM_CSIPHY, "ACQUIRE_CNT: %d",
 			csiphy_dev->acquire_count);
@@ -1208,6 +1473,15 @@ int32_t cam_csiphy_core_cfg(void *phy_dev,
 			CAM_SECURE_MODE_NON_SECURE;
 
 		csiphy_dev->csiphy_info[offset].csiphy_cpas_cp_reg_mask = 0x0;
+
+		if (csiphy_dev->ctrl_reg->csiphy_reg
+			.prgm_cmn_reg_across_csiphy) {
+			mutex_lock(&active_csiphy_cnt_mutex);
+			active_csiphy_hw_cnt--;
+			mutex_unlock(&active_csiphy_cnt_mutex);
+
+			csiphy_prgm_cmn_data(csiphy_dev, true);
+		}
 
 		rc = cam_csiphy_disable_hw(csiphy_dev);
 		if (rc < 0)
@@ -1339,7 +1613,7 @@ int32_t cam_csiphy_core_cfg(void *phy_dev,
 				csiphy_dev->ctrl_reg->getclockvoting(
 					csiphy_dev, offset);
 			rc = cam_soc_util_set_clk_rate_level(
-				&csiphy_dev->soc_info, clk_vote_level, false);
+				&csiphy_dev->soc_info, clk_vote_level);
 			if (rc) {
 				CAM_WARN(CAM_CSIPHY,
 					"Failed to set the clk_rate level: %d",
@@ -1451,6 +1725,16 @@ int32_t cam_csiphy_core_cfg(void *phy_dev,
 			goto release_mutex;
 		}
 		csiphy_dev->start_dev_count++;
+
+		if (csiphy_dev->ctrl_reg->csiphy_reg
+			.prgm_cmn_reg_across_csiphy) {
+			csiphy_prgm_cmn_data(csiphy_dev, false);
+
+			mutex_lock(&active_csiphy_cnt_mutex);
+			active_csiphy_hw_cnt++;
+			mutex_unlock(&active_csiphy_cnt_mutex);
+		}
+
 		CAM_DBG(CAM_CSIPHY, "START DEV CNT: %d",
 			csiphy_dev->start_dev_count);
 		csiphy_dev->csiphy_state = CAM_CSIPHY_START;
@@ -1479,4 +1763,21 @@ release_mutex:
 	mutex_unlock(&csiphy_dev->mutex);
 
 	return rc;
+}
+
+void cam_csiphy_register_baseaddress(struct csiphy_device *csiphy_dev)
+{
+	if (!csiphy_dev) {
+		CAM_WARN(CAM_CSIPHY, "Data is NULL");
+		return;
+	}
+
+	if (csiphy_dev->soc_info.index >= MAX_CSIPHY) {
+		CAM_ERR(CAM_CSIPHY, "Invalid soc index: %u Max soc index: %u",
+			csiphy_dev->soc_info.index, MAX_CSIPHY);
+		return;
+	}
+
+	g_phy_data[csiphy_dev->soc_info.index].base_address =
+		csiphy_dev->soc_info.reg_map[0].mem_base;
 }

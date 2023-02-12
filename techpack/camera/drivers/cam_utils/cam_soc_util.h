@@ -470,12 +470,11 @@ int cam_soc_util_clk_enable(struct clk *clk, const char *clk_name,
  *
  * @soc_info:           Device soc information
  * @clk_level:          Clock level number to set
- * @do_not_set_src_clk: If true, set clock rates except the src clk
  *
  * @return:             Success or failure
  */
 int cam_soc_util_set_clk_rate_level(struct cam_hw_soc_info *soc_info,
-	enum cam_vote_level clk_level, bool do_not_set_src_clk);
+	enum cam_vote_level clk_level);
 
 /**
  * cam_soc_util_clk_disable()
@@ -700,4 +699,10 @@ int cam_soc_util_reg_dump_to_cmd_buf(void *ctx,
  */
 int cam_soc_util_print_clk_freq(struct cam_hw_soc_info *soc_info);
 
+#if defined(CONFIG_SEC_P3Q_PROJECT)
+int cam_soc_util_force_regulator_disable(struct regulator *rgltr,
+	const char *rgltr_name,
+	uint32_t rgltr_min_volt, uint32_t rgltr_max_volt,
+	uint32_t rgltr_op_mode, uint32_t rgltr_delay);
+#endif
 #endif /* _CAM_SOC_UTIL_H_ */

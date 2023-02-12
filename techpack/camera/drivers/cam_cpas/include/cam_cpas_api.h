@@ -718,4 +718,8 @@ int cam_cpas_select_qos_settings(uint32_t selection_mask);
 int cam_cpas_notify_event(const char *identifier_string,
 	int32_t identifier_value);
 
+#if defined(CONFIG_SAMSUNG_SBI_QOS_TUNE)
+int cam_cpas_uhd_case(bool uhd_start);
+#endif
+
 #endif /* _CAM_CPAS_API_H_ */

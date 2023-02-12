@@ -12,6 +12,11 @@
 #include "cam_debug_util.h"
 #include "cam_cx_ipeak.h"
 #include "cam_mem_mgr.h"
+#if defined(CONFIG_SEC_P3Q_PROJECT)
+#include <linux/regulator/driver.h>
+#include <linux/regulator/machine.h>
+#include <internal.h>
+#endif
 
 static char supported_clk_info[256];
 
@@ -907,7 +912,7 @@ end:
 }
 
 int cam_soc_util_set_clk_rate_level(struct cam_hw_soc_info *soc_info,
-	enum cam_vote_level clk_level, bool do_not_set_src_clk)
+	enum cam_vote_level clk_level)
 {
 	int i, rc = 0;
 	enum cam_vote_level apply_level;
@@ -928,16 +933,6 @@ int cam_soc_util_set_clk_rate_level(struct cam_hw_soc_info *soc_info,
 		cam_cx_ipeak_update_vote_cx_ipeak(soc_info, apply_level);
 
 	for (i = 0; i < soc_info->num_clk; i++) {
-		if (do_not_set_src_clk && (i == soc_info->src_clk_idx)) {
-			CAM_DBG(CAM_UTIL, "Skipping set rate for src clk %s",
-				soc_info->clk_name[i]);
-			continue;
-		}
-
-		CAM_DBG(CAM_UTIL, "Set rate for clk %s rate %d",
-			soc_info->clk_name[i],
-			soc_info->clk_rate[apply_level][i]);
-
 		rc = cam_soc_util_set_clk_rate(soc_info->clk[i],
 			soc_info->clk_name[i],
 			soc_info->clk_rate[apply_level][i]);
@@ -2537,3 +2532,52 @@ int cam_soc_util_print_clk_freq(struct cam_hw_soc_info *soc_info)
 
 	return 0;
 }
+
+#if defined(CONFIG_SEC_P3Q_PROJECT)
+int cam_soc_util_force_regulator_disable(struct regulator *rgltr,
+	const char *rgltr_name, uint32_t rgltr_min_volt,
+	uint32_t rgltr_max_volt, uint32_t rgltr_op_mode,
+	uint32_t rgltr_delay_ms)
+{
+	int32_t retry = 5120;
+	int32_t rc = 0;
+
+	if (!rgltr) {
+		CAM_ERR(CAM_UTIL, "Invalid NULL parameter");
+		return -EINVAL;
+	}
+
+	CAM_INFO(CAM_UTIL, "E");
+
+	if (rgltr->always_on) {
+		CAM_INFO(CAM_UTIL, "%s regulator always on, skip", rgltr_name);
+		return rc;
+	}
+
+	while ((regulator_is_enabled(rgltr) > 0) && (retry > 0))
+	{
+		rc = regulator_disable(rgltr);
+		if (rc) {
+			CAM_ERR(CAM_UTIL, "%s regulator disable failed", rgltr_name);
+			return rc;
+		}
+		retry--;
+	}
+	if (retry <= 0)
+		CAM_ERR(CAM_UTIL, "%s regulator force disable failed", rgltr_name);
+
+	if (rgltr_delay_ms > 20)
+		msleep(rgltr_delay_ms);
+	else if (rgltr_delay_ms)
+		usleep_range(rgltr_delay_ms * 1000,
+			(rgltr_delay_ms * 1000) + 1000);
+
+	if (regulator_count_voltages(rgltr) > 0) {
+		regulator_set_load(rgltr, 0);
+		regulator_set_voltage(rgltr, 0, rgltr_max_volt);
+	}
+	CAM_INFO(CAM_UTIL, "X");
+
+	return rc;
+}
+#endif

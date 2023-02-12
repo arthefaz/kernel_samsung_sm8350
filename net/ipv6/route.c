@@ -41,7 +41,6 @@
 #include <linux/nsproxy.h>
 #include <linux/slab.h>
 #include <linux/jhash.h>
-#include <linux/siphash.h>
 #include <net/net_namespace.h>
 #include <net/snmp.h>
 #include <net/ipv6.h>
@@ -1503,24 +1502,17 @@ static void rt6_exception_remove_oldest(struct rt6_exception_bucket *bucket)
 static u32 rt6_exception_hash(const struct in6_addr *dst,
 			      const struct in6_addr *src)
 {
-	static siphash_key_t rt6_exception_key __read_mostly;
-	struct {
-		struct in6_addr dst;
-		struct in6_addr src;
-	} __aligned(SIPHASH_ALIGNMENT) combined = {
-		.dst = *dst,
-	};
-	u64 val;
+	static u32 seed __read_mostly;
+	u32 val;
 
-	net_get_random_once(&rt6_exception_key, sizeof(rt6_exception_key));
+	net_get_random_once(&seed, sizeof(seed));
+	val = jhash(dst, sizeof(*dst), seed);
 
 #ifdef CONFIG_IPV6_SUBTREES
 	if (src)
-		combined.src = *src;
+		val = jhash(src, sizeof(*src), val);
 #endif
-	val = siphash(&combined, sizeof(combined), &rt6_exception_key);
-
-	return hash_64(val, FIB6_EXCEPTION_BUCKET_SIZE_SHIFT);
+	return hash_32(val, FIB6_EXCEPTION_BUCKET_SIZE_SHIFT);
 }
 
 /* Helper function to find the cached rt in the hash table
@@ -5508,15 +5500,14 @@ static int rt6_fill_node(struct net *net, struct sk_buff *skb,
 			goto nla_put_failure;
 
 		if (fib_add_nexthop(skb, &rt->fib6_nh->nh_common,
-				    rt->fib6_nh->fib_nh_weight, AF_INET6,
-				    0) < 0)
+				    rt->fib6_nh->fib_nh_weight, AF_INET6) < 0)
 			goto nla_put_failure;
 
 		list_for_each_entry_safe(sibling, next_sibling,
 					 &rt->fib6_siblings, fib6_siblings) {
 			if (fib_add_nexthop(skb, &sibling->fib6_nh->nh_common,
 					    sibling->fib6_nh->fib_nh_weight,
-					    AF_INET6, 0) < 0)
+					    AF_INET6) < 0)
 				goto nla_put_failure;
 		}
 

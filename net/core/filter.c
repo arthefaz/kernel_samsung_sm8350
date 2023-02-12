@@ -2030,13 +2030,13 @@ static const struct bpf_func_proto bpf_csum_update_proto = {
 
 static inline int __bpf_rx_skb(struct net_device *dev, struct sk_buff *skb)
 {
-	return dev_forward_skb(dev, skb);
+	return dev_forward_skb_nomtu(dev, skb);
 }
 
 static inline int __bpf_rx_skb_no_mac(struct net_device *dev,
 				      struct sk_buff *skb)
 {
-	int ret = ____dev_forward_skb(dev, skb);
+	int ret = ____dev_forward_skb(dev, skb, false);
 
 	if (likely(!ret)) {
 		skb->dev = dev;
@@ -2839,9 +2839,6 @@ static int bpf_skb_proto_4_to_6(struct sk_buff *skb)
 	u32 off = skb_mac_header_len(skb);
 	int ret;
 
-	if (skb_is_gso(skb) && !skb_is_gso_tcp(skb))
-		return -ENOTSUPP;
-
 	ret = skb_cow(skb, len_diff);
 	if (unlikely(ret < 0))
 		return ret;
@@ -2860,10 +2857,6 @@ static int bpf_skb_proto_4_to_6(struct sk_buff *skb)
 			shinfo->gso_type &= ~SKB_GSO_TCPV4;
 			shinfo->gso_type |=  SKB_GSO_TCPV6;
 		}
-
-		/* Header must be checked, and gso_segs recomputed. */
-		shinfo->gso_type |= SKB_GSO_DODGY;
-		shinfo->gso_segs = 0;
 	}
 
 	skb->protocol = htons(ETH_P_IPV6);
@@ -2877,9 +2870,6 @@ static int bpf_skb_proto_6_to_4(struct sk_buff *skb)
 	const u32 len_diff = sizeof(struct ipv6hdr) - sizeof(struct iphdr);
 	u32 off = skb_mac_header_len(skb);
 	int ret;
-
-	if (skb_is_gso(skb) && !skb_is_gso_tcp(skb))
-		return -ENOTSUPP;
 
 	ret = skb_unclone(skb, GFP_ATOMIC);
 	if (unlikely(ret < 0))
@@ -2899,10 +2889,6 @@ static int bpf_skb_proto_6_to_4(struct sk_buff *skb)
 			shinfo->gso_type &= ~SKB_GSO_TCPV6;
 			shinfo->gso_type |=  SKB_GSO_TCPV4;
 		}
-
-		/* Header must be checked, and gso_segs recomputed. */
-		shinfo->gso_type |= SKB_GSO_DODGY;
-		shinfo->gso_segs = 0;
 	}
 
 	skb->protocol = htons(ETH_P_IP);
@@ -8376,27 +8362,6 @@ static u32 sk_skb_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_LDX_MEM(BPF_SIZEOF(void *), si->dst_reg,
 				      si->src_reg, off);
 		break;
-	case offsetof(struct __sk_buff, cb[0]) ...
-	     offsetofend(struct __sk_buff, cb[4]) - 1:
-		BUILD_BUG_ON(sizeof_field(struct sk_skb_cb, data) < 20);
-		BUILD_BUG_ON((offsetof(struct sk_buff, cb) +
-			      offsetof(struct sk_skb_cb, data)) %
-			     sizeof(__u64));
-
-		prog->cb_access = 1;
-		off  = si->off;
-		off -= offsetof(struct __sk_buff, cb[0]);
-		off += offsetof(struct sk_buff, cb);
-		off += offsetof(struct sk_skb_cb, data);
-		if (type == BPF_WRITE)
-			*insn++ = BPF_STX_MEM(BPF_SIZE(si->code), si->dst_reg,
-					      si->src_reg, off);
-		else
-			*insn++ = BPF_LDX_MEM(BPF_SIZE(si->code), si->dst_reg,
-					      si->src_reg, off);
-		break;
-
-
 	default:
 		return bpf_convert_ctx_access(type, si, insn_buf, prog,
 					      target_size);

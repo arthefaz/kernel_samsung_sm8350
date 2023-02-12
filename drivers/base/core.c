@@ -642,7 +642,9 @@ struct device_link *device_link_add(struct device *consumer,
 	dev_set_name(&link->link_dev, "%s--%s",
 		     dev_name(supplier), dev_name(consumer));
 	if (device_register(&link->link_dev)) {
-		put_device(&link->link_dev);
+		put_device(consumer);
+		put_device(supplier);
+		kfree(link);
 		link = NULL;
 		goto out;
 	}
@@ -1411,12 +1413,19 @@ static void device_links_purge(struct device *dev)
 	device_links_write_unlock();
 }
 
+#ifdef CONFIG_QGKI
+extern int i2c_gpio_init_done;
+#endif
 static void fw_devlink_link_device(struct device *dev)
 {
 	int fw_ret;
 
 	mutex_lock(&defer_fw_devlink_lock);
-	if (!defer_fw_devlink_count)
+	if (!defer_fw_devlink_count
+#ifdef CONFIG_QGKI
+		&& i2c_gpio_init_done
+#endif
+)
 		device_link_add_missing_supplier_links();
 
 	/*

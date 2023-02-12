@@ -519,11 +519,7 @@ static void print_vmalloc_lowmem_info(void)
 void __init mem_init(void)
 {
 #ifdef CONFIG_ARM_LPAE
-	if (swiotlb_force == SWIOTLB_FORCE ||
-	    max_pfn > arm_dma_pfn_limit)
-		swiotlb_init(1);
-	else
-		swiotlb_force = SWIOTLB_NO_FORCE;
+	swiotlb_init(1);
 #endif
 
 	set_max_mapnr(pfn_to_page(max_pfn) - mem_map);
